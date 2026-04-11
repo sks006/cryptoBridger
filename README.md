@@ -1,6 +1,5 @@
-# Lamyt Finance — Crypto Fiat Card MVP
+# CryptoBridger — Crypto Fiat Card MVP
 
-![Lamyt Logo](https://via.placeholder.com/150x50?text=Lamyt+Finance) <!-- Replace with actual logo -->
 
 A revolutionary crypto fiat card that lets you spend your crypto without selling it. Built on Solana with Anchor smart contracts, Lamyt enables credit mode spending, 2% cashback rewards, and daily interest on collateral.
 
