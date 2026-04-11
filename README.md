@@ -219,9 +219,7 @@ NEXT_PUBLIC_JUPITER_API_URL=https://quote-api.jup.ag/v4
     └── e2e
 ```
 
-## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
 1. Fork the repository
 2. Create a feature branch
@@ -229,15 +227,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 4. Add tests
 5. Submit a pull request
 
-## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 📞 Contact
-
-- Website: [lamyt.finance](https://lamyt.finance)
-- Twitter: [@LamytFinance](https://twitter.com/LamytFinance)
-- Discord: [Join our community](https://discord.gg/lamyt)
 
 ## ⚠️ Disclaimer
 
