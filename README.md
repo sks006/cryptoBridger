@@ -61,8 +61,8 @@ A revolutionary crypto fiat card that lets you spend your crypto without selling
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-org/lamyt-finance.git
-cd lamyt-finance
+git clone https://github.com/sks006/cryptoBridger.git
+cd cryptoBridger
 ```
 
 ### 2. Setup Web Application
