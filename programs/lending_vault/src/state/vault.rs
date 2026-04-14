@@ -3,10 +3,10 @@ use anchor_lang::prelude::*;
 #[account]
 #[derive(InitSpace)]  // Optimizes rent cost
 pub struct Vault {
-    /// Authority (you, the founder/admin) — can update config later
+    /// Authority ( the founder/admin) — can update config later
     pub authority: Pubkey,
 
-    /// Total SOL deposited by all users (in lamports)
+    /// Total SOL deposited by all users (in lamports - smallest SOL unit)
     pub total_collateral: u64,
 
     /// Total vault shares issued (for yield distribution)
