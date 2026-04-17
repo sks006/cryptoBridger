@@ -1,7 +1,7 @@
 [workspace]
-members = [
-    "programs/lending_vault",
-]
+resolver = "2"
+members = ["programs/lending_vault"]
+exclude = ["backend"]
 
 [profile.release]
 overflow-checks = true

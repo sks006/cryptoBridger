@@ -12,6 +12,12 @@ pub struct Vault {
     /// Total vault shares issued (for yield distribution)
     pub total_shares: u64,
 
+    /// Total amount borrowed by all users (in lamports equivalent)
+    pub total_borrowed: u64,
+
+    // total borrowed shares (for proportional repayments)
+    pub total_borrowed_shares: u64,
+
     /// Pyth price feed for SOL/USD (used for collateral valuation)
     pub sol_price_feed: Pubkey,
 

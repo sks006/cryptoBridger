@@ -3,6 +3,8 @@ use anchor_lang::prelude::*;
 #[account]
 #[derive(InitSpace)]
 pub struct UserPosition {
+    //user authority
+    pub authority: Pubkey,
     /// Owner of this position (user's wallet)
     pub owner: Pubkey,
 
@@ -17,6 +19,9 @@ pub struct UserPosition {
 
     /// Last time this position was updated (for yield accrual)
     pub last_updated: i64,
+
+    /// How many shares of the borrowed amount this user has (for proportional repayments)
+    pub borrowed_shares: u64,
 
     /// PDA bump seed
     pub bump: u8,
