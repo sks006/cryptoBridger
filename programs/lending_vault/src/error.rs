@@ -11,6 +11,9 @@ pub enum ErrorCode {
     #[msg("Invalid amount")]
     InvalidAmount,
 
+    #[msg("Invalid oracle account")]
+    InvalidOracleAccount,
+
     #[msg("Stale oracle price - price is too old")]
     StaleOraclePrice,
 
@@ -31,4 +34,13 @@ pub enum ErrorCode {
 
     #[msg("Slippage tolerance exceeded")]
     SlippageExceeded,
+    #[msg("Invalid authority")]
+    InvalidAuthority,
+    #[msg("No outstanding debt to repay")]
+    NoDebt,
+    #[msg("Invalid owner for this position")]
+    InvalidOwner,
+    #[msg("Position is healthy and cannot be liquidated")]
+    PositionHealthy,
+    
 }
