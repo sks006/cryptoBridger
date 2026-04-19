@@ -106,7 +106,7 @@ NEXT_PUBLIC_JUPITER_API_URL=https://quote-api.jup.ag/v4
 
 1. Connect your Solana wallet
 2. Deposit collateral (SOL or supported tokens)
-3. Activate your virtual Lamyt Card
+3. Activate your virtual crypto to a flat Card
 4. Start spending and earning rewards
 
 ### For Developers
