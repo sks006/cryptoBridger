@@ -12,7 +12,7 @@
  * - POS Simulator: /pos-simulator → src/app/pos-simulator/page.tsx
  */
 
-export const APP_NAME = "Lamyt Finance";
+export const APP_NAME = "Crypto to Fiat Card Finance";
 export const APP_VERSION = "0.1.0";
 export const APP_DESCRIPTION = "Crypto card powered by Solana & Jupiter DEX";
 

@@ -12,12 +12,13 @@ import {
   Lock,
   Percent,
   Wallet,
+  Smartphone,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import Header from "@/components/Lamyt/Header";
-import Footer from "@/components/Lamyt/Footer";
+import Header from "@/components/cardbridger/Header";
+import Footer from "@/components/cardbridger/Footer";
 
 const features = [
   {
@@ -68,6 +69,14 @@ const features = [
     color: "text-pink-400",
     bg: "bg-pink-500/10 border-pink-500/20",
   },
+  {
+    icon: Smartphone,
+    title: "Tap to Pay (NFC)",
+    description:
+      "Use your phone like a physical card. Secure contactless payments powered by JIT liquidity swaps.",
+    color: "text-orange-400",
+    bg: "bg-orange-500/10 border-orange-500/20",
+  },
 ];
 
 const steps = [
@@ -84,7 +93,7 @@ const steps = [
   {
     step: "03",
     title: "Activate Your Card",
-    description: "Get your virtual Lamyt Card instantly and start spending worldwide.",
+    description: "Get your virtual CardBridger Card instantly and start spending worldwide.",
   },
   {
     step: "04",
@@ -139,8 +148,8 @@ export default function Home() {
                   </Link>
                 </Button>
                 <Button variant="outline" size="xl" asChild>
-                  <Link href="/swap">
-                    Try Swap <ChevronRight className="w-5 h-5" />
+                  <Link href="/nfc/tap">
+                    Tap to Pay <Smartphone className="w-5 h-5 ml-2" />
                   </Link>
                 </Button>
               </div>
@@ -182,7 +191,7 @@ export default function Home() {
                         <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center">
                           <Zap className="w-3.5 h-3.5 text-white" />
                         </div>
-                        <span className="font-bold text-white tracking-wider">LAMYT</span>
+                        <span className="font-bold text-white tracking-wider">CardBridger</span>
                       </div>
                       {/* Chip */}
                       <div className="w-10 h-8 rounded-md border border-white/20 bg-gradient-to-br from-yellow-400/30 to-yellow-600/30 flex items-center justify-center">
@@ -245,7 +254,7 @@ export default function Home() {
                 Powerful benefits, no matter how you spend
               </h2>
               <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-                Lamyt combines the best of DeFi with everyday spending convenience.
+                CardBridger combines the best of DeFi with everyday spending convenience.
               </p>
             </div>
 
@@ -380,7 +389,7 @@ export default function Home() {
             <div className="max-w-2xl mx-auto">
               <h2 className="text-3xl md:text-4xl font-bold mb-4">
                 Start spending smarter with{" "}
-                <span className="gradient-text">Lamyt</span>
+                <span className="gradient-text">CardBridger</span>
               </h2>
               <p className="text-muted-foreground text-lg mb-8">
                 Connect your Solana wallet and activate your card in under 2 minutes.

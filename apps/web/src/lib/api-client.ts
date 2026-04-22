@@ -1,105 +1,162 @@
+// apps/web/src/lib/api-client.ts
+
+// Fetch backend URL from environment, with fallback for local development
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080";
+
+// Validate that we have a URL (optional but helpful for debugging)
+if (!process.env.NEXT_PUBLIC_BACKEND_URL) {
+  console.warn("⚠️ NEXT_PUBLIC_BACKEND_URL not set. Using fallback: http://localhost:8080");
+} else {
+  console.log(`✅ Backend URL configured: ${BACKEND_URL}`);
+}
+
+// Get fresh nonce before every tap
+export async function getNonce(): Promise<string> {
+  const res = await fetch(`${BACKEND_URL}/nfc/nonce`);
+  if (!res.ok) throw new Error("Failed to get nonce");
+  const data = await res.json();
+  return data.nonce;
+}
+
+// Main tap function - called by useNFCTap
+export async function nfcTap(params: {
+  walletAddress: string;
+  amount: number;
+  deviceId: string;
+  nonce: string;
+}) {
+  const res = await fetch(`${BACKEND_URL}/nfc/tap`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      wallet_address: params.walletAddress,
+      amount: params.amount,
+      device_id: params.deviceId,
+      nonce: params.nonce,
+    }),
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error.message || "Tap failed");
+  }
+
+  return res.json();
+}
+
+// ==================== NEW FUNCTIONS ====================
+
+export interface BalanceResponse {
+  balance: number;
+  availableCredit: number;
+}
+
 /**
- * API client for Rust backend communication
- * Handles card swipe simulation, balance queries, and transaction management
+ * Fetch the current card balance for a wallet
  */
+export async function getBalance(walletAddress: string): Promise<BalanceResponse> {
+  try {
+    // The backend route is currently commented out in main.rs, 
+    // so we'll use a try-catch to avoid breaking the UI
+    const res = await fetch(`${BACKEND_URL}/card/balance?address=${walletAddress}`);
+    if (!res.ok) throw new Error("Backend route not active");
+    return res.json();
+  } catch (e) {
+    // Fallback mock balance for demo if backend isn't ready
+    return { 
+      balance: 1250.50,
+      availableCredit: 1250.50 
+    };
+  }
+}
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+/**
+ * Update card settings (Freeze, Limits, Mode)
+ */
+export async function updateCardSettings(params: {
+  walletAddress: string;
+  isFrozen?: boolean;
+  mode?: "credit" | "debit";
+  spendingLimit?: number;
+}) {
+  console.log("Updating card settings on backend:", params);
+  
+  // For the MVP demo, we'll simulate a successful update
+  await new Promise(r => setTimeout(r, 500));
+  return { success: true, updated: params };
+}
 
-export interface SwipeRequest {
+/**
+ * Deposit SOL collateral to the lending vault
+ */
+export async function depositCollateral(params: {
+  walletAddress: string;
+  amount: number;
+  signature: string;
+}) {
+  console.log("Processing collateral deposit:", params);
+  
+  // Simulate backend processing
+  await new Promise(r => setTimeout(r, 1000));
+  
+  return {
+    success: true,
+    txHash: params.signature || "mock_tx_" + Math.random().toString(36).substring(7),
+    newAvailableCredit: 2500.0, // Mocked increase
+  };
+}
+
+/**
+ * Interface for the POS Simulator response
+ */
+export interface SwipeResponse {
+  success: boolean;
+  message: string;
+  transactionId: string;
+  approvedAmount: number;
+  cashbackAmount: number;
+  newBalance: number;
+  txHash?: string;
+}
+
+/**
+ * Simulate a physical card swipe or online purchase
+ */
+export async function swipeCard(params: {
   merchantName: string;
   merchantCategory: string;
   amount: number;
   currency: string;
   walletAddress: string;
-}
+}): Promise<SwipeResponse> {
+  console.log("Processing swipe at merchant:", params.merchantName);
+  
+  // Simulate network/blockchain delay
+  await new Promise(r => setTimeout(r, 1200));
 
-export interface SwipeResponse {
-  success: boolean;
-  transactionId: string;
-  approvedAmount: number;
-  cashbackAmount: number;
-  message: string;
-  newBalance: number;
-  txHash?: string;
-}
+  // For the MVP demo, we'll auto-approve if amount < 2000
+  const isApproved = params.amount < 2000;
+  const cashbackRate = 0.02; // 2% for MVP
+  const cashbackAmount = params.amount * cashbackRate;
 
-export interface BalanceResponse {
-  walletAddress: string;
-  solBalance: number;
-  usdcBalance: number;
-  collateralValue: number;
-  availableCredit: number;
-  healthFactor: number;
-}
+  if (!isApproved) {
+    return {
+      success: false,
+      message: "Declined: Insufficient Credit Line",
+      transactionId: "FAILED",
+      approvedAmount: 0,
+      cashbackAmount: 0,
+      newBalance: 2500.0,
+    };
+  }
 
-export interface DepositRequest {
-  walletAddress: string;
-  amount: number; // in SOL
-  signature: string;
-}
-
-export interface DepositResponse {
-  success: boolean;
-  txHash: string;
-  newCollateralValue: number;
-  newAvailableCredit: number;
-}
-
-// Mock API calls (replace with actual fetch calls to Rust backend)
-
-export async function swipeCard(req: SwipeRequest): Promise<SwipeResponse> {
-  // Simulate network delay
-  await new Promise((r) => setTimeout(r, 800));
-
-  const approved = req.amount <= 500;
-  return {
-    success: approved,
-    transactionId: `TX${Date.now()}`,
-    approvedAmount: approved ? req.amount : 0,
-    cashbackAmount: approved ? req.amount * 0.02 : 0,
-    message: approved ? "Transaction approved" : "Insufficient credit limit",
-    newBalance: 2500 - (approved ? req.amount : 0),
-    txHash: approved ? `${Math.random().toString(36).slice(2, 8)}...${Math.random().toString(36).slice(2, 6)}` : undefined,
-  };
-}
-
-export async function getBalance(
-  walletAddress: string
-): Promise<BalanceResponse> {
-  await new Promise((r) => setTimeout(r, 300));
-
-  return {
-    walletAddress,
-    solBalance: 12.5482,
-    usdcBalance: 2500.0,
-    collateralValue: 12.5482 * 168.45,
-    availableCredit: 1263.18,
-    healthFactor: 1.78,
-  };
-}
-
-export async function depositCollateral(
-  req: DepositRequest
-): Promise<DepositResponse> {
-  await new Promise((r) => setTimeout(r, 1200));
-
-  const newCollateralValue = req.amount * 168.45;
   return {
     success: true,
-    txHash: `${Math.random().toString(36).slice(2, 8)}...${Math.random().toString(36).slice(2, 6)}`,
-    newCollateralValue,
-    newAvailableCredit: newCollateralValue * 0.8,
+    message: `Approved at ${params.merchantName}`,
+    transactionId: "TX-" + Math.random().toString(36).substring(2, 9).toUpperCase(),
+    approvedAmount: params.amount,
+    cashbackAmount: cashbackAmount,
+    newBalance: 2500.0 - params.amount + cashbackAmount,
+    txHash: "57kPkY..." + Math.random().toString(36).substring(2, 5),
   };
 }
-
-export async function updateCardSettings(settings: {
-  walletAddress: string;
-  isFrozen?: boolean;
-  spendingLimit?: number;
-  mode?: "credit" | "debit";
-}): Promise<{ success: boolean }> {
-  await new Promise((r) => setTimeout(r, 400));
-  return { success: true };
-}
-
-export { API_BASE_URL };
