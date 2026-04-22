@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useWallet } from '@solana/wallet-adapter-react';
 import {
   ShoppingCart,
   CreditCard,
@@ -18,16 +19,14 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import Header from "@/components/Lamyt/Header";
-import Footer from "@/components/Lamyt/Footer";
+import Header from "@/components/cardbridger/Header";
+import Footer from "@/components/cardbridger/Footer";
 import { swipeCard, type SwipeResponse } from "@/lib/api-client";
-import { formatCurrency } from "@/lib/utils";
-
-const MOCK_WALLET = "8xK9mBzLpQRnVwT3cY7dFhJeN2sAuXiCvMoP4gS5tEq";
+import { formatCurrency, shortenAddress } from "@/lib/utils";
+import { useCardState } from "@/hooks/useCardState";
 
 interface Merchant {
   name: string;
@@ -98,18 +97,26 @@ interface TransactionLog {
 }
 
 export default function POSSimulatorPage() {
+  const { publicKey, connected } = useWallet();
+  const { cardNumber, mode, availableCredit, isLoading: cardLoading } = useCardState();
+
   const [selectedMerchant, setSelectedMerchant] = useState<Merchant | null>(null);
   const [customAmount, setCustomAmount] = useState("");
   const [selectedAmount, setSelectedAmount] = useState<number | null>(null);
   const [processing, setProcessing] = useState(false);
   const [lastResponse, setLastResponse] = useState<SwipeResponse | null>(null);
   const [txLog, setTxLog] = useState<TransactionLog[]>([]);
-  const [cardBalance, setCardBalance] = useState(2500);
+  const [displayBalance, setDisplayBalance] = useState<number>(0);
+
+  // Update display balance when availableCredit changes
+  useEffect(() => {
+    setDisplayBalance(availableCredit);
+  }, [availableCredit]);
 
   const finalAmount = selectedAmount ?? parseFloat(customAmount) ?? 0;
 
   const handleSwipe = async () => {
-    if (!selectedMerchant || !finalAmount) return;
+    if (!selectedMerchant || !finalAmount || !publicKey) return;
     setProcessing(true);
     setLastResponse(null);
 
@@ -118,12 +125,13 @@ export default function POSSimulatorPage() {
       merchantCategory: selectedMerchant.category,
       amount: finalAmount,
       currency: "USD",
-      walletAddress: MOCK_WALLET,
+      walletAddress: publicKey.toBase58(),
     });
 
     setLastResponse(response);
     if (response.success) {
-      setCardBalance(response.newBalance);
+      // Update local balance after successful swipe
+      setDisplayBalance(response.newBalance);
       setTxLog((prev) => [
         {
           id: response.transactionId,
@@ -144,6 +152,31 @@ export default function POSSimulatorPage() {
     setCustomAmount("");
   };
 
+  // Show wallet connection prompt if not connected
+  if (!connected || !publicKey) {
+    return (
+      <div className="min-h-screen flex flex-col bg-background">
+        <Header />
+        <main className="flex-1 container mx-auto px-4 py-8 flex items-center justify-center">
+          <Card className="max-w-md w-full">
+            <CardHeader>
+              <CardTitle>Connect Wallet</CardTitle>
+              <CardDescription>
+                Please connect your Solana wallet to use the POS Simulator.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex justify-center">
+              <Button variant="gradient" onClick={() => document.querySelector<HTMLButtonElement>('[data-testid="wallet-connect-button"]')?.click()}>
+                Connect Wallet
+              </Button>
+            </CardContent>
+          </Card>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-background">
       <Header />
@@ -155,16 +188,17 @@ export default function POSSimulatorPage() {
             <Badge variant="warning">Demo Mode</Badge>
           </div>
           <p className="text-sm text-muted-foreground">
-            Simulate card swipes at real merchants. Calls the backend{" "}
-            <code className="text-xs bg-secondary px-1.5 py-0.5 rounded">/swipe</code>{" "}
-            endpoint.
+            Simulate card swipes at real merchants. Uses your connected wallet:{" "}
+            <code className="text-xs bg-secondary px-1.5 py-0.5 rounded font-mono">
+              {shortenAddress(publicKey.toBase58())}
+            </code>
           </p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* POS Terminal */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Card status bar */}
+            {/* Dynamic Card status bar */}
             <Card className="border-border">
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
@@ -173,14 +207,16 @@ export default function POSSimulatorPage() {
                       <Zap className="w-5 h-5 text-emerald-400" />
                     </div>
                     <div>
-                      <p className="text-sm font-semibold">Lamyt Card **** 4291</p>
-                      <p className="text-xs text-muted-foreground">Credit Mode · Active</p>
+                      <p className="text-sm font-semibold">CardBridger {cardNumber}</p>
+                      <p className="text-xs text-muted-foreground capitalize">
+                        {mode} Mode · {cardLoading ? 'Loading...' : 'Active'}
+                      </p>
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="text-xs text-muted-foreground">Available</p>
+                    <p className="text-xs text-muted-foreground">Available Credit</p>
                     <p className="text-lg font-bold text-emerald-400">
-                      {formatCurrency(cardBalance)}
+                      {cardLoading ? '—' : formatCurrency(displayBalance)}
                     </p>
                   </div>
                 </div>

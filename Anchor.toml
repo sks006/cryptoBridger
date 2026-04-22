@@ -14,7 +14,9 @@ cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [programs.devnet]
-lending_vault = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"   # placeholder, will be updated
+lending_vault = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+nfc_authorization = "NFC1111111111111111111111111111111111111111"
 
 [programs.localnet]
 lending_vault = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+nfc_authorization = "NFC1111111111111111111111111111111111111111"
