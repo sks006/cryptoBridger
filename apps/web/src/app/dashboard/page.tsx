@@ -28,11 +28,16 @@ import { useCardBalance } from "@/hooks/useCardBalance";
 import { getMockTransactions, getMockCardState } from "@/lib/anchor-client";
 import { formatCurrency, shortenAddress } from "@/lib/utils";
 
+import { useWallet } from "@solana/wallet-adapter-react";
+
 const MOCK_WALLET = "8xK9mBzLpQRnVwT3cY7dFhJeN2sAuXiCvMoP4gS5tEq";
 
 export default function DashboardPage() {
-  const healthFactor = useHealthFactor(MOCK_WALLET);
-  const cardBalance = useCardBalance(MOCK_WALLET);
+  const { publicKey } = useWallet();
+  const walletAddress = publicKey?.toBase58() || MOCK_WALLET;
+
+  const healthFactor = useHealthFactor(walletAddress);
+  const cardBalance = useCardBalance(walletAddress);
   const transactions = getMockTransactions();
   const cardState = getMockCardState();
   const monthlySpend = transactions
@@ -55,7 +60,7 @@ export default function DashboardPage() {
             <p className="text-sm text-muted-foreground mt-1">
               Wallet:{" "}
               <span className="font-mono text-foreground">
-                {shortenAddress(MOCK_WALLET)}
+                {shortenAddress(walletAddress)}
               </span>
             </p>
           </div>

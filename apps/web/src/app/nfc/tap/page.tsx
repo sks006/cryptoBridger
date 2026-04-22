@@ -6,14 +6,19 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { AlertCircle } from "lucide-react";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { useHealthFactor } from "@/hooks/useHealthFactor";
 
-// Demo values (in real app these will come from wallet + Solana program)
-const DEMO_WALLET = "7xKpABC123demoWallet9mN3";
-const DEMO_COLLATERAL_USDC = 1250.00;
-const DEMO_HEALTH_FACTOR = 2.45;
 const MAX_LTV_PERCENT = 40;
 
 export default function NFCTapPage() {
+  const { publicKey } = useWallet();
+  const walletAddress = publicKey?.toBase58() || "7xKpABC123demoWallet9mN3";
+  const { position, healthFactor: liveHealthFactor } = useHealthFactor(walletAddress);
+
+  const collateralUsdc = position?.collateralUsdValue || 1250.00;
+  const healthFactor = position ? liveHealthFactor : 2.45;
+
   const [amount, setAmount] = useState<number>(8.40);
   const [mounted, setMounted] = useState(false);
 
@@ -22,7 +27,7 @@ export default function NFCTapPage() {
   }, []);
 
   // Calculate maximum allowed spend
-  const maxSpend = (DEMO_COLLATERAL_USDC * MAX_LTV_PERCENT) / 100;
+  const maxSpend = (collateralUsdc * MAX_LTV_PERCENT) / 100;
   const isOverLimit = amount > maxSpend;
   const availableCreditPercent = MAX_LTV_PERCENT;
 
@@ -41,13 +46,13 @@ export default function NFCTapPage() {
         <CardContent className="pt-6 space-y-4">
           <div className="flex justify-between items-center">
             <span className="text-sm font-medium text-muted-foreground">Collateral Balance</span>
-            <span className="text-2xl font-bold">${DEMO_COLLATERAL_USDC.toFixed(2)} USDC</span>
+            <span className="text-2xl font-bold">${collateralUsdc.toFixed(2)} USDC</span>
           </div>
 
           <div className="flex justify-between items-center">
             <span className="text-sm font-medium text-muted-foreground">Health Factor</span>
             <span className="text-2xl font-bold text-emerald-500">
-              {DEMO_HEALTH_FACTOR.toFixed(2)}x
+              {healthFactor.toFixed(2)}x
             </span>
           </div>
 
@@ -110,8 +115,8 @@ export default function NFCTapPage() {
 
       <NFCTapButton 
         amount={amount} 
-        walletAddress={DEMO_WALLET}
-        healthFactor={DEMO_HEALTH_FACTOR}
+        walletAddress={walletAddress}
+        healthFactor={healthFactor}
       />
 
       <div className="text-center text-xs text-muted-foreground max-w-xs">

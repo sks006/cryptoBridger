@@ -25,6 +25,11 @@ export default function WalletConnect({ className }: WalletConnectProps) {
   const [copied, setCopied] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [balance, setBalance] = useState<number | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // ✅ Fetch balance whenever publicKey, connected, or connection changes
   useEffect(() => {
@@ -52,7 +57,12 @@ export default function WalletConnect({ className }: WalletConnectProps) {
     }
   };
 
+  if (!mounted) {
+    return <div className={className} style={{ minWidth: "150px" }}></div>;
+  }
+
   if (!connected) {
+
     return (
       <div className={className}>
         <WalletMultiButton />
