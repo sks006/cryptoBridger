@@ -24,12 +24,13 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
-import Header from "@/components/Lamyt/Header";
-import Footer from "@/components/Lamyt/Footer";
+import Header from "@/components/cardbridger/Header";
+import Footer from "@/components/cardbridger/Footer";
 import Topup from "@/app/card/topup";
 import { getMockCardState, getMockCollateralPosition } from "@/lib/anchor-client";
 import { updateCardSettings } from "@/lib/api-client";
 import { formatCurrency } from "@/lib/utils";
+import Link from "next/link";
 
 const MOCK_WALLET = "8xK9mBzLpQRnVwT3cY7dFhJeN2sAuXiCvMoP4gS5tEq";
 
@@ -188,6 +189,17 @@ export default function CardPage() {
                       <SnowflakeIcon className="w-4 h-4" />
                     )}
                     {cardState.isFrozen ? "Unfreeze" : "Freeze"}
+                  </Button>
+                  <Button
+                    variant="gradient"
+                    size="sm"
+                    className="col-span-2 mt-2"
+                    asChild
+                  >
+                    <Link href="/nfc/tap">
+                      <Smartphone className="w-4 h-4 mr-2" />
+                      Provision for Apple/Google Pay
+                    </Link>
                   </Button>
                 </div>
               </div>
