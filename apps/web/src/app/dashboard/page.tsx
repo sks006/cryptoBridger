@@ -12,12 +12,14 @@ import {
   Bell,
   TrendingUp,
   Wallet,
+  Smartphone,
+  Store,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import Header from "@/components/Lamyt/Header";
-import Footer from "@/components/Lamyt/Footer";
+import Header from "@/components/cardbridger/Header";
+import Footer from "@/components/cardbridger/Footer";
 import HealthFactorMeter from "@/components/HealthFactorMeter";
 import CardBalance from "@/components/CardBalance";
 import Transactions from "@/app/dashboard/transactions";
@@ -245,17 +247,23 @@ export default function DashboardPage() {
             />
 
             {/* Quick actions */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <Button variant="outline" className="h-14 flex-col gap-1" asChild>
                 <Link href="/swap">
                   <ArrowLeftRight className="w-5 h-5 text-cyan-400" />
-                  <span className="text-xs">Swap Tokens</span>
+                  <span className="text-xs font-medium">Swap</span>
+                </Link>
+              </Button>
+              <Button variant="outline" className="h-14 flex-col gap-1" asChild>
+                <Link href="/nfc/tap">
+                  <Smartphone className="w-5 h-5 text-orange-400" />
+                  <span className="text-xs font-medium">NFC Tap</span>
                 </Link>
               </Button>
               <Button variant="outline" className="h-14 flex-col gap-1" asChild>
                 <Link href="/pos-simulator">
-                  <CreditCard className="w-5 h-5 text-emerald-400" />
-                  <span className="text-xs">POS Simulator</span>
+                  <Store className="w-5 h-5 text-emerald-400" />
+                  <span className="text-xs font-medium">POS Sim</span>
                 </Link>
               </Button>
             </div>
