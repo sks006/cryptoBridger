@@ -98,6 +98,12 @@ interface TransactionLog {
 
 export default function POSSimulatorPage() {
   const { publicKey, connected } = useWallet();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const { cardNumber, mode, availableCredit, isLoading: cardLoading } = useCardState();
 
   const [selectedMerchant, setSelectedMerchant] = useState<Merchant | null>(null);
@@ -151,6 +157,8 @@ export default function POSSimulatorPage() {
     setSelectedAmount(null);
     setCustomAmount("");
   };
+
+  if (!mounted) return null;
 
   // Show wallet connection prompt if not connected
   if (!connected || !publicKey) {
