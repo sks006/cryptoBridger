@@ -1,7 +1,11 @@
+// apps/web/src/hooks/useHealthFactor.ts
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { getMockCollateralPosition, type CollateralPosition } from "@/lib/anchor-client";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { PublicKey } from "@solana/web3.js";
+import { useAnchorProvider } from "./useAnchorProvider";
+import { fetchUserPosition, type CollateralPosition } from "@/lib/anchor-client";
 
 export interface HealthFactorState {
   position: CollateralPosition | null;
@@ -14,46 +18,43 @@ export interface HealthFactorState {
   refresh: () => void;
 }
 
-function getRiskLevel(hf: number): {
-  level: "safe" | "moderate" | "warning" | "critical";
-  color: string;
-  label: string;
-} {
-  if (hf >= 2.0) return { level: "safe", color: "text-emerald-400", label: "Safe" };
-  if (hf >= 1.5) return { level: "moderate", color: "text-cyan-400", label: "Moderate" };
-  if (hf >= 1.1) return { level: "warning", color: "text-yellow-400", label: "At Risk" };
-  return { level: "critical", color: "text-red-400", label: "Critical" };
+function getRiskLevel(hf: number) {
+  if (hf >= 2.0) return { level: "safe", color: "text-emerald-400", label: "Safe" } as const;
+  if (hf >= 1.5) return { level: "moderate", color: "text-cyan-400", label: "Moderate" } as const;
+  if (hf >= 1.1) return { level: "warning", color: "text-yellow-400", label: "At Risk" } as const;
+  return { level: "critical", color: "text-red-400", label: "Critical" } as const;
 }
 
-export function useHealthFactor(walletAddress?: string): HealthFactorState {
+export function useHealthFactor(address?: string): HealthFactorState {
+  const { publicKey: walletPublicKey } = useWallet();
+  const provider = useAnchorProvider();
   const [position, setPosition] = useState<CollateralPosition | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchPosition = useCallback(async () => {
-    if (!walletAddress) return;
+    const activeAddress = address || walletPublicKey?.toBase58();
+    if (!activeAddress || !provider) return;
     setLoading(true);
     setError(null);
     try {
-      // Simulate network delay
-      await new Promise((r) => setTimeout(r, 400));
-      const pos = getMockCollateralPosition();
+      const pubkey = new PublicKey(activeAddress);
+      const pos = await fetchUserPosition(pubkey, provider);
       setPosition(pos);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to fetch position");
+    } catch (e: any) {
+      setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [walletAddress]);
+  }, [address, walletPublicKey?.toBase58(), provider]);
 
   useEffect(() => {
     fetchPosition();
-    // Poll every 30 seconds
     const interval = setInterval(fetchPosition, 30_000);
     return () => clearInterval(interval);
   }, [fetchPosition]);
 
-  const healthFactor = position?.healthFactor ?? 0;
+  const healthFactor = position?.healthFactor ?? (walletPublicKey ? 9999 : 0);
   const risk = getRiskLevel(healthFactor);
 
   return {
