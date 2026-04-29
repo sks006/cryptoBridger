@@ -1,8 +1,4 @@
 // backend/src/handlers/nfc.rs
-//
-// This file handles all NFC-related requests from the frontend.
-// It is the bridge between the user's phone tap and your Solana lending vault.
-
 use axum::{
     extract::State,
     http::StatusCode,
@@ -12,139 +8,102 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use chrono::Utc;
-use uuid::Uuid;
 
-use crate::state::memory_store::AppState;
-
-// ─────────────────────────────────────────────────────────────
-// 1. GET /nfc/nonce  → Generate a one-time security code
-// ─────────────────────────────────────────────────────────────
-// Why: Prevents replay attacks. Frontend must send a fresh nonce with every tap.
-
-#[derive(Serialize)]
-pub struct NonceResponse {
-    pub nonce: String,
-}
-
-pub async fn get_nonce(
-    State(state): State<Arc<Mutex<AppState>>>,
-) -> Json<NonceResponse> {
-    let mut app_state = state.lock().await;
-    let nonce = app_state.nonce_store.generate_nonce();
-
-    Json(NonceResponse { nonce })
-}
-
-// ─────────────────────────────────────────────────────────────
-// 2. POST /nfc/tap   → Main tap handler (the core feature)
-// ─────────────────────────────────────────────────────────────
+use crate::state::memory_store::{AppState, SharedState};
+use crate::solana::{client::SolanaClient, vault_ix};
 
 #[derive(Deserialize)]
 pub struct NFCTapRequest {
-    pub wallet_address: String,     // User's Solana wallet
-    pub amount: u64,                // Amount in smallest unit (e.g. USDC with 6 decimals)
-    pub device_id: String,          // Phone/device identifier
-    pub nonce: String,              // Security nonce from /nfc/nonce
-    pub merchant_data: Option<serde_json::Value>, // Optional merchant info from NFC tag
+    pub wallet_address: String,
+    pub amount: u64,           // Amount in EURC (e.g. 500 = €5.00)
+    pub device_id: String,
+    pub nonce: String,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct NFCTapResponse {
     pub success: bool,
     pub receipt_id: String,
     pub amount: u64,
-    pub merchant_name: String,
-    pub timestamp: String,
-    pub new_health_factor: f64,     // Updated after repay
+    pub tx_signature: String,
     pub message: String,
+    pub new_health_factor: f64,
+    pub timestamp: String,
 }
 
 pub async fn nfc_tap(
-    State(state): State<Arc<Mutex<AppState>>>,
+    State(state): State<SharedState>,
     Json(payload): Json<NFCTapRequest>,
-) -> Result<Json<NFCTapResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<NFCTapResponse>, StatusCode> {
+    // ==================== 1. SECURITY: NONCE VALIDATION ====================
     let mut app_state = state.lock().await;
-
-    // 1. Validation
-    if payload.amount == 0 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "message": "Amount must be greater than zero" })),
-        ));
-    }
-
-    // 2. Security: Verify nonce (one-time use)
     if !app_state.nonce_store.verify_and_consume_nonce(&payload.nonce) {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "message": "Invalid or expired nonce. Please refresh and try again." })),
-        ));
+        tracing::warn!("Invalid or expired nonce used");
+        return Err(StatusCode::UNAUTHORIZED);
     }
 
-    // 3. Extract merchant name (fallback for demo)
-    let merchant_name = payload
-        .merchant_data
-        .as_ref()
-        .and_then(|d| d.get("merchantName"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("Crypto Terminal")
-        .to_string();
+    // ==================== 2. BUILD BORROW INSTRUCTION ====================
+    let user_pubkey = payload.wallet_address
+        .parse::<solana_sdk::pubkey::Pubkey>()
+        .map_err(|_| {
+            tracing::error!("Invalid wallet address: {}", payload.wallet_address);
+            StatusCode::BAD_REQUEST
+        })?;
 
-    // 4. Simulate payment (MVP)
-    // In real version: Call your Solana lending_vault repay instruction here
-    let receipt_id = format!("RCPT-{}", Uuid::new_v4().simple());
+    let borrow_ix = vault_ix::build_borrow_ix(user_pubkey, payload.amount);
 
-    // Log the tap for demo/analytics
-    let record = crate::state::memory_store::NfcTapRecord {
-        timestamp: Utc::now().timestamp(),
-        amount: payload.amount,
-        receipt_id: receipt_id.clone(),
-    };
-    app_state
-        .nfc_taps
-        .entry(payload.wallet_address.clone())
-        .or_default()
-        .push(record);
+    // ==================== 3. LOAD AUTHORITY KEYPAIR ====================
+    let authority_raw = std::env::var("AUTHORITY_KEYPAIR")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // 5. Return success response
+    let authority_bytes: Vec<u8> = serde_json::from_str(&authority_raw)
+        .map_err(|e| {
+            tracing::error!("Failed to parse AUTHORITY_KEYPAIR: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let authority_keypair = solana_sdk::signer::keypair::Keypair::from_bytes(&authority_bytes)
+        .map_err(|e| {
+            tracing::error!("Invalid authority keypair: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // ==================== 4. EXECUTE ON-CHAIN TRANSACTION ====================
+    let rpc_url = std::env::var("SOLANA_RPC_URL")
+        .unwrap_or_else(|_| "https://api.devnet.solana.com".to_string());
+
+    let client = SolanaClient::new(&rpc_url);
+
+    let signature = client.send_and_confirm_jit_tx(borrow_ix, &authority_keypair)
+        .await
+        .map_err(|e| {
+            tracing::error!("Transaction failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    // ==================== 5. LOG & RETURN RECEIPT ====================
+    let receipt_id = format!("RCPT-{}", Utc::now().timestamp_millis());
+
+    tracing::info!(
+        "✅ NFC Tap successful | User: {} | Amount: {} | Tx: {}",
+        payload.wallet_address, payload.amount, signature
+    );
+
     Ok(Json(NFCTapResponse {
         success: true,
         receipt_id,
         amount: payload.amount,
-        merchant_name,
+        tx_signature: signature.to_string(),
+        message: "JIT Borrow + Payment approved on Solana".to_string(),
+        new_health_factor: 1.85,           // TODO: Fetch real HF from on-chain later
         timestamp: Utc::now().to_rfc3339(),
-        new_health_factor: 1.92,           // Simulated improvement after repay
-        message: "Payment approved via JIT liquidity on Solana".to_string(),
     }))
 }
 
-// ─────────────────────────────────────────────────────────────
-// 3. POST /nfc/provision → Mock Apple/Google Pay provisioning
-// ─────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-pub struct NFCProvisionRequest {
-    pub wallet_pubkey: String,
-    pub device_id: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NFCProvisionResponse {
-    pub pan_token: String,
-    pub expiry: String,
-    pub device_id: String,
-}
-
-pub async fn nfc_provision(
-    Json(payload): Json<NFCProvisionRequest>,
-) -> Json<NFCProvisionResponse> {
-    let device_id = payload.device_id.unwrap_or_else(|| format!("dev_{}", Uuid::new_v4().simple()));
-
-    Json(NFCProvisionResponse {
-        pan_token: format!("TKN-{}", Uuid::new_v4().simple()),
-        expiry: "12/28".to_string(),
-        device_id,
-    })
+// Optional: Keep this for future real Web NFC flow
+pub async fn get_nonce(
+    State(state): State<SharedState>,
+) -> Json<String> {
+    let mut app_state = state.lock().await;
+    Json(app_state.nonce_store.generate_nonce())
 }
