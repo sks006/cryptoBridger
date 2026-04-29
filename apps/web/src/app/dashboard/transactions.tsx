@@ -15,6 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { Transaction } from "@/lib/anchor-client";
+import { useState, useEffect } from "react";
 
 interface TransactionsProps {
   transactions: Transaction[];
@@ -58,6 +59,12 @@ function formatTimeAgo(date: Date): string {
 }
 
 export default function Transactions({ transactions, loading }: TransactionsProps) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   if (loading) {
     return (
       <Card>
@@ -114,14 +121,14 @@ export default function Transactions({ transactions, loading }: TransactionsProp
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
                     <span className="text-xs text-muted-foreground">
-                      {tx.merchant || formatTimeAgo(tx.timestamp)}
+                      {tx.merchant || (mounted ? formatTimeAgo(tx.timestamp) : "...")}
                     </span>
                     {tx.merchant && (
                       <span className="text-xs text-muted-foreground">·</span>
                     )}
                     {tx.merchant && (
                       <span className="text-xs text-muted-foreground">
-                        {formatTimeAgo(tx.timestamp)}
+                        {mounted ? formatTimeAgo(tx.timestamp) : "..."}
                       </span>
                     )}
                   </div>

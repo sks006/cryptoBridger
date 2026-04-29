@@ -3,6 +3,7 @@
 // Thin proxy to the Rust backend POST /nfc/tap endpoint.
 // Keeps the backend URL server-side only (never exposed to the browser).
 
+
 import { NextRequest, NextResponse } from "next/server";
 
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8080";

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   Zap,
@@ -34,6 +34,12 @@ const MOCK_WALLET = "8xK9mBzLpQRnVwT3cY7dFhJeN2sAuXiCvMoP4gS5tEq";
 
 export default function DashboardPage() {
   const { publicKey } = useWallet();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const walletAddress = publicKey?.toBase58() || MOCK_WALLET;
 
   const healthFactor = useHealthFactor(walletAddress);
@@ -47,6 +53,8 @@ export default function DashboardPage() {
   const totalCashback = transactions
     .filter((t) => t.type === "cashback")
     .reduce((sum, t) => sum + t.amount, 0);
+
+  if (!mounted) return null;
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -161,7 +169,7 @@ export default function DashboardPage() {
                       <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center">
                         <Zap className="w-3 h-3 text-white" />
                       </div>
-                      <span className="font-bold text-white text-sm tracking-wider">LAMYT</span>
+                      <span className="font-bold text-white text-sm tracking-wider">CardBridger</span>
                     </div>
                     <div className="flex items-center gap-2">
                       {cardState.isFrozen && (
@@ -282,3 +290,6 @@ export default function DashboardPage() {
     </div>
   );
 }
+
+
+

@@ -21,7 +21,7 @@ export function useCardBalance(walletAddress?: string): CardBalanceState {
 
   const fetchBalance = useCallback(async () => {
     // Safety check: Don't fetch if wallet is not connected or address is missing
-    if (!walletAddress || walletAddress === "8xK9mBzLpQRnVwT3cY7dFhJeN2sAuXiCvMoP4gS5tEq") {
+    if (!walletAddress) {
       setLoading(false);
       return;
     }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   SnowflakeIcon,
   Eye,
@@ -37,6 +37,12 @@ import { useWallet } from "@solana/wallet-adapter-react";
 
 export default function CardPage() {
   const { publicKey } = useWallet();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const walletAddress = publicKey?.toBase58() ;
 
   const [cardState, setCardState] = useState(getMockCardState());
@@ -78,6 +84,8 @@ export default function CardPage() {
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 2000);
   };
+
+  if (!mounted) return null;
 
   return (
     <div className="min-h-screen flex flex-col bg-background">

@@ -4,17 +4,19 @@
 import React from "react";
 import { cn } from "@/lib/utils";
 import { Smartphone, Wifi, CheckCircle2, XCircle, Loader2 } from "lucide-react";
-import type { NFCTapState } from "@/lib/nfc";
+import type { NFCState } from "@/hooks/useNFCTap";
 
 interface NFCRingAnimationProps {
+  /** Whether the animation is active (not idle) */
   active: boolean;
   /** Current tap state — drives ring color and center icon */
-  status: NFCTapState;
+  status: NFCState;
+  /** Optional extra className */
   className?: string;
 }
 
 const STATUS_CONFIG: Record<
-  NFCTapState,
+  NFCState,
   { ring: string; gradient: string; icon: React.ReactNode }
 > = {
   idle: {
