@@ -185,4 +185,8 @@ programs/*/Cargo.lock
 
 # Infrastructure
 infrastructure/terraform/.terraform/
+<<<<<<< HEAD
 infrastructure/terraform/*.tfstate*
+=======
+infrastructure/terraform/*.tfstate*
+>>>>>>> 8d364398b1099d975c371e05e238572b8c9520a5

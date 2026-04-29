@@ -17,9 +17,9 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/card", label: "Card", icon: CreditCard },
-  { href: "/swap", label: "Swap", icon: ArrowLeftRight },
-  { href: "/pos-simulator", label: "POS Sim", icon: ShoppingCart },
+  // { href: "/card", label: "Card", icon: CreditCard },
+  // { href: "/swap", label: "Swap", icon: ArrowLeftRight },
+  // { href: "/pos-simulator", label: "POS Sim", icon: ShoppingCart },
 ];
 
 export default function Header() {

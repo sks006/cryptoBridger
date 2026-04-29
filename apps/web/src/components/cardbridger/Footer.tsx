@@ -13,7 +13,7 @@ export default function Footer() {
               <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center">
                 <Zap className="w-3.5 h-3.5 text-white" />
               </div>
-              <span className="font-bold gradient-text">Lamyt</span>
+              <span className="font-bold gradient-text">CardBridge</span>
             </Link>
             <p className="text-sm text-muted-foreground leading-relaxed">
               Spend your crypto without selling it. Powered by Solana.

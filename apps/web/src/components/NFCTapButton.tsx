@@ -10,143 +10,148 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { useNFCTap } from "@/hooks/useNFCTap";
 import { NFCRingAnimation } from "./NFCRingAnimation";
 import {
   Smartphone,
   RotateCcw,
   CheckCircle2,
   AlertCircle,
+  Loader2,
 } from "lucide-react";
 
 interface NFCTapButtonProps {
   amount: number;
-  walletAddress: string;
-  healthFactor?: number;
+  onTap: (amount: number) => Promise<void> | void;
+  state: "idle" | "scanning" | "processing" | "success" | "error";
+  error?: string | null;
+  receipt?: any;
+  onReset: () => void;
+  disabled?: boolean;
 }
 
 const STATE_LABELS: Record<string, string> = {
   idle: "Contactless Payment",
   scanning: "Waiting for NFC tag…",
-  processing: "Processing payment…",
-  success: "Payment Complete",
+  processing: "Processing on Solana...",
+  success: "Payment Successful",
   error: "Payment Failed",
 };
 
 export const NFCTapButton: React.FC<NFCTapButtonProps> = ({
   amount,
-  walletAddress,
-  healthFactor,
+  onTap,
+  state,
+  error,
+  receipt,
+  onReset,
+  disabled = false,
 }) => {
-  const { state, error, receipt, startTap, reset, isWebNFCSupported } =
-    useNFCTap();
+  const isActive = state !== "idle";
+  const canTap = state === "idle" && amount > 0 && !disabled;
 
-  /**
-   * CRITICAL: handleTap must be the direct onClick handler.
-   * Do NOT wrap in setTimeout / async-before-startTap.
-   * Web NFC requires NDEFReader.scan() to be called while a user gesture
-   * is still active in the call stack — any async gap breaks it.
-   */
   const handleTap = () => {
-    startTap(amount, walletAddress, healthFactor);
+    if (canTap) {
+      onTap(amount);        // Direct call - critical for future real Web NFC
+    }
   };
 
-  const isActive = state !== "idle";
-  const canTap = state === "idle" && amount > 0 && Boolean(walletAddress);
-
   return (
-    <Card className="w-full max-w-sm mx-auto overflow-hidden border-2 transition-all duration-300 hover:shadow-xl dark:bg-zinc-900/50">
-      <CardHeader className="text-center pb-2">
-        <CardTitle className="text-xl font-bold tracking-tight">
-          {STATE_LABELS[state] ?? "Payment"}
+    <Card className="w-full max-w-sm mx-auto overflow-hidden border-2 border-border transition-all duration-300 hover:shadow-2xl dark:bg-zinc-900/50">
+      <CardHeader className="text-center pb-3">
+        <CardTitle className="text-xl font-bold tracking-tight text-foreground">
+          {STATE_LABELS[state] ?? "Tap to Pay"}
         </CardTitle>
         <p className="text-sm text-muted-foreground">
-          {isWebNFCSupported
-            ? "Hold phone near the NFC terminal"
-            : "Simulated NFC — no hardware required"}
+          {state === "idle" 
+            ? "Powered by Solana • Instant JIT Borrow" 
+            : "Real-time on-chain transaction"}
         </p>
       </CardHeader>
 
-      <CardContent className="flex flex-col items-center py-8">
-        {/* Ring animation — status maps 1:1 to state */}
-        <NFCRingAnimation active={isActive} status={state} className="mb-6" />
+      <CardContent className="flex flex-col items-center py-10">
+        {/* Main Animation */}
+        <NFCRingAnimation 
+          active={isActive} 
+          status={state} 
+          className="mb-8" 
+        />
 
-        {/* Amount */}
-        <div className="text-center space-y-2">
-          <div className="text-3xl font-extrabold">
-            ${amount.toFixed(2)}{" "}
-            <span className="text-sm font-normal text-muted-foreground">
-              USDC
-            </span>
+        {/* Amount Display */}
+        <div className="text-center space-y-3 mb-6">
+          <div className="text-5xl font-extrabold tracking-tighter text-white">
+            €{amount.toFixed(2)}
           </div>
+          <p className="text-sm font-medium text-muted-foreground">EURC</p>
 
+          {/* Success State */}
           {state === "success" && receipt && (
-            <div className="flex items-center justify-center gap-2 text-emerald-500 font-medium text-sm">
-              <CheckCircle2 size={16} />
-              Paid to {receipt.merchantName}
-            </div>
-          )}
-
-          {state === "success" && receipt && (
-            <div className="text-xs text-muted-foreground space-y-1 mt-2 text-center">
-              <div>Receipt: {receipt.receiptId}</div>
-              <div>
-                Health factor after:{" "}
-                <span className="text-emerald-500 font-semibold">
-                  {receipt.newHealthFactor.toFixed(2)}
-                </span>
+            <div className="flex flex-col items-center gap-2 text-emerald-400">
+              <CheckCircle2 className="w-8 h-8" />
+              <p className="font-semibold">Transaction Confirmed</p>
+              <div className="text-xs text-muted-foreground space-y-1">
+                <div>Receipt ID: {receipt.receiptId}</div>
+                {receipt.txHash && (
+                  <a 
+                    href={`https://solscan.io/tx/${receipt.txHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-cyan-400 hover:underline inline-flex items-center gap-1"
+                  >
+                    View on Solscan →
+                  </a>
+                )}
               </div>
             </div>
           )}
 
+          {/* Error State */}
           {state === "error" && (
-            <div className="flex items-center justify-center gap-2 text-red-500 font-medium text-sm">
-              <AlertCircle size={16} />
-              {error ?? "Payment failed. Please try again."}
+            <div className="flex items-center justify-center gap-2 text-red-500 text-sm font-medium">
+              <AlertCircle className="w-5 h-5" />
+              {error || "Payment could not be completed"}
             </div>
           )}
         </div>
       </CardContent>
 
-      <CardFooter className="flex flex-col gap-3 pt-0">
+      <CardFooter className="flex flex-col gap-3 pb-6">
+        {/* Idle State - Main Action Button */}
         {state === "idle" && (
           <Button
-            onClick={handleTap}     // ← synchronous, no wrapper
+            onClick={handleTap}
             disabled={!canTap}
-            className="w-full h-12 text-base font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-lg hover:shadow-blue-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full h-14 text-lg font-semibold bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white shadow-xl disabled:opacity-60 disabled:cursor-not-allowed transition-all active:scale-[0.985]"
           >
-            <Smartphone className="mr-2 h-5 w-5" />
-            {isWebNFCSupported ? "Tap to Pay" : "Simulate Tap"}
+            <Smartphone className="mr-3 h-6 w-6" />
+            Tap to Pay
           </Button>
         )}
 
+        {/* Processing State */}
+        {state === "processing" && (
+          <div className="w-full py-4 flex items-center justify-center gap-3 text-amber-500">
+            <Loader2 className="w-5 h-5 animate-spin" />
+            <span className="font-medium">Borrowing EURC &amp; Processing...</span>
+          </div>
+        )}
+
+        {/* Scanning State (if you implement real Web NFC later) */}
+        {state === "scanning" && (
+          <p className="w-full text-center py-4 text-sm font-medium text-muted-foreground animate-pulse">
+            Hold near terminal...
+          </p>
+        )}
+
+        {/* Reset Button for Success / Error */}
         {(state === "success" || state === "error") && (
           <Button
             variant="outline"
-            onClick={reset}
-            className="w-full h-12"
+            onClick={onReset}
+            className="w-full h-12 text-base"
           >
             <RotateCcw className="mr-2 h-4 w-4" />
-            New Transaction
+            New Payment
           </Button>
-        )}
-
-        {state === "scanning" && (
-          <p className="w-full text-center py-3 text-sm font-medium text-muted-foreground animate-pulse">
-            Bring your phone close to the terminal…
-          </p>
-        )}
-
-        {state === "processing" && (
-          <p className="w-full text-center py-3 text-sm font-medium text-amber-500">
-            Authorising on Solana…
-          </p>
-        )}
-
-        {!walletAddress && state === "idle" && (
-          <p className="text-xs text-center text-muted-foreground">
-            Connect your wallet to enable payments.
-          </p>
         )}
       </CardFooter>
     </Card>

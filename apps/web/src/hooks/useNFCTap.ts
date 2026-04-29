@@ -1,65 +1,101 @@
 // apps/web/src/hooks/useNFCTap.ts
+"use client";
+
 import { useState, useCallback } from "react";
-import { getNonce, nfcTap } from "@/lib/api-client";
-import { mockNFC } from "@/lib/nfc/mock-nfc";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { useAnchorProvider } from "./useAnchorProvider";
+import { useHealthFactor } from "./useHealthFactor";
+import { buildBorrowTransaction } from "@/lib/anchor-client";
+import { SOL_USD_PRICE_UPDATE, EUR_USD_PRICE_UPDATE } from "@/lib/pyth-feeds";
+import { nfcTap } from "@/lib/api-client";
 
 export type NFCState = "idle" | "scanning" | "processing" | "success" | "error";
 
 export function useNFCTap() {
+  const { publicKey } = useWallet();
+  const provider = useAnchorProvider();
+  const { healthFactor, position, refresh } = useHealthFactor();
+
   const [state, setState] = useState<NFCState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<any>(null);
 
-  const isWebNFCSupported = typeof window !== "undefined" && "NDEFReader" in window;
-
-  const startTap = useCallback(async (
-    amount: number,
-    walletAddress: string,
-    healthFactor: number = 2.0
-  ) => {
-    // 1. Safety check
-    if (healthFactor < 1.0) {
-      setError("Health Factor too low. Add more collateral first.");
+  const startTap = useCallback(async (amountEurc: number) => {
+    if (!publicKey || !provider) {
+      setError("Please connect your Solana wallet");
       setState("error");
       return;
     }
 
-    setState("scanning");
+    // Safety checks using real on-chain data
+    if (healthFactor < 1.2) {
+      setError("Health Factor too low. Add more collateral before spending.");
+      setState("error");
+      return;
+    }
+
+    const maxBorrow = position?.maxBorrowable || 0;
+    if (amountEurc > maxBorrow) {
+      setError(`You can only spend up to €${maxBorrow.toFixed(2)} based on your collateral.`);
+      setState("error");
+      return;
+    }
+
+    setState("processing");
     setError(null);
 
     try {
-      // Step 1: Get fresh security nonce from backend
-      const nonce = await getNonce();
+      // 1. Real on-chain borrow (JIT)
+      const tx = await buildBorrowTransaction(
+        publicKey,
+        amountEurc,
+        provider,
+        SOL_USD_PRICE_UPDATE,
+        EUR_USD_PRICE_UPDATE
+      );
 
-      // Step 2: Simulate tap (real Web NFC on Android, mock on desktop/iOS)
-      await simulateMockTap(amount, walletAddress, nonce);
-    } catch (err: any) {
-      setError(err.message || "Failed to start tap");
-      setState("error");
-    }
-  }, []); // ← dependency array is empty because we don't depend on changing values
-
-  // Mock tap simulation (used for demo on all devices)
-  const simulateMockTap = async (amount: number, walletAddress: string, nonce: string) => {
-    setState("processing");
-
-    try {
-      const mockResult = await mockNFC.simulateTap(1200); // 1.2 second realistic delay
-
-      const response = await nfcTap({
-        walletAddress,
-        amount,
-        deviceId: mockResult.serialNumber,
-        nonce,
+      // Sign and send
+      const signedTx = await provider.wallet.signTransaction!(tx);
+      const txid = await provider.connection.sendRawTransaction(signedTx.serialize(), {
+        skipPreflight: false,
       });
 
-      setReceipt(response);
+      // Wait for confirmation
+      await provider.connection.confirmTransaction({
+        signature: txid,
+        blockhash: (await provider.connection.getLatestBlockhash()).blockhash,
+        lastValidBlockHeight: (await provider.connection.getLatestBlockhash()).lastValidBlockHeight,
+      }, "confirmed");
+
+      // 2. Optional: Notify backend for logging / receipt
+      const backendResponse = await nfcTap({
+        walletAddress: publicKey.toBase58(),
+        amount: amountEurc,
+        deviceId: "web-nfc-demo",
+        nonce: Date.now().toString(),
+      }).catch(() => ({})); // Don't fail the whole tap if backend is down
+
+      // 3. Create nice receipt for UI
+      setReceipt({
+        receiptId: `RCPT-${Date.now().toString(36).toUpperCase()}`,
+        amount: amountEurc,
+        merchantName: "Demo Terminal",
+        timestamp: new Date().toISOString(),
+        txHash: txid,
+        newHealthFactor: Math.max(1.1, (healthFactor - 0.25)),
+        message: "Payment approved via Solana JIT borrow",
+      });
+
       setState("success");
+
+      // Refresh health factor and balance
+      refresh();
     } catch (err: any) {
-      setError(err.message || "Payment failed");
+      console.error("Tap failed:", err);
+      setError(err.message || "Transaction failed. Please try again.");
       setState("error");
     }
-  };
+  }, [publicKey, provider, healthFactor, position, refresh]);
 
   const reset = useCallback(() => {
     setState("idle");
@@ -73,6 +109,5 @@ export function useNFCTap() {
     receipt,
     startTap,
     reset,
-    isWebNFCSupported,
   };
 }
