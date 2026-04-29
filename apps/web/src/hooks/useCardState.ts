@@ -1,71 +1,91 @@
+// apps/web/src/hooks/useCardState.ts
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { getBalance } from "@/lib/api-client";
+import { useAnchorProvider } from "./useAnchorProvider";
+import { fetchUserPosition } from "@/lib/anchor-client";
 import { shortenAddress } from "@/lib/utils";
 
-/**
- * Hook to manage and provide the current state of the user's CardBridger card.
- * Connects to the real Solana wallet and fetches state from the backend.
- */
-export function useCardState() {
+export interface DynamicCardState {
+  cardNumber: string;
+  mode: "credit" | "debit";
+  availableCredit: number;
+  totalCollateral: number;
+  healthFactor: number;
+  isFrozen: boolean;
+  isLoading: boolean;
+  error: string | null;
+  refresh: () => void;
+}
+
+export function useCardState(): DynamicCardState {
   const { publicKey, connected } = useWallet();
-  const [state, setState] = useState({
+  const provider = useAnchorProvider();
+  const [state, setState] = useState<DynamicCardState>({
     cardNumber: "Connect Wallet",
-    mode: "credit" as "credit" | "debit",
+    mode: "credit",
     availableCredit: 0,
+    totalCollateral: 0,
+    healthFactor: 0,
     isFrozen: false,
-    isLoading: true,
+    isLoading: false,
+    error: null,
   });
 
-  useEffect(() => {
-    async function fetchCardState() {
-      // 1. If not connected, clear loading and exit
-      if (!connected || !publicKey) {
-        setState(prev => ({ 
-          ...prev, 
-          cardNumber: "Connect Wallet", 
-          isLoading: false,
-          availableCredit: 0 
-        }));
-        return;
-      }
-
-      setState(prev => ({ ...prev, isLoading: true }));
-
-      try {
-        // 2. Fetch with a safety timeout (5 seconds)
-        // If your localtunnel is slow or has a landing page, this prevents a permanent hang.
-        const balancePromise = getBalance(publicKey.toBase58());
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error("API Timeout")), 5000)
-        );
-
-        const data = await Promise.race([balancePromise, timeoutPromise]) as any;
-        
-        setState({
-          cardNumber: shortenAddress(publicKey.toBase58()),
-          mode: "credit",
-          availableCredit: data.balance,
-          isFrozen: false,
-          isLoading: false,
-        });
-      } catch (error) {
-        console.warn("Fetch failed, using fallback values:", error);
-        // 3. Fallback to a demo balance if the backend is unreachable
-        setState({
-          cardNumber: shortenAddress(publicKey.toBase58()),
-          mode: "credit",
-          availableCredit: 1250.50, 
-          isFrozen: false,
-          isLoading: false,
-        });
-      }
+  const refresh = useCallback(async () => {
+    if (!connected || !publicKey || !provider) {
+      setState(s => ({
+        ...s,
+        cardNumber: "Connect Wallet",
+        isLoading: false,
+        availableCredit: 0,
+      }));
+      return;
     }
 
-    fetchCardState();
-  }, [publicKey, connected]);
+    setState(s => ({ ...s, isLoading: true, error: null }));
 
-  return state;
+    try {
+      const pos = await fetchUserPosition(publicKey, provider);
+      if (pos) {
+        setState({
+          cardNumber: shortenAddress(publicKey.toBase58()),
+          mode: pos.borrowedAmount > 0 ? "credit" : "debit",
+          availableCredit: pos.maxBorrowable,
+          totalCollateral: pos.collateralUsdValue,
+          healthFactor: pos.healthFactor,
+          isFrozen: false, // we could add a real flag later
+          isLoading: false,
+          error: null,
+        });
+      } else {
+        // no position yet, show zeroed state
+        setState(s => ({
+          ...s,
+          cardNumber: shortenAddress(publicKey.toBase58()),
+          mode: "debit",
+          availableCredit: 0,
+          totalCollateral: 0,
+          healthFactor: 0,
+          isLoading: false,
+          error: null,
+        }));
+      }
+    } catch (e: any) {
+      setState(s => ({
+        ...s,
+        isLoading: false,
+        error: e.message || "Failed to load card data",
+      }));
+    }
+  }, [connected, publicKey, provider]);
+
+  useEffect(() => {
+    refresh();
+    const interval = setInterval(refresh, 30_000);
+    return () => clearInterval(interval);
+  }, [refresh]);
+
+  return { ...state, refresh };
 }
