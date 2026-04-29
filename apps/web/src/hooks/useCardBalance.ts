@@ -20,18 +20,24 @@ export function useCardBalance(walletAddress?: string): CardBalanceState {
   const [error, setError] = useState<string | null>(null);
 
   const fetchBalance = useCallback(async () => {
-    if (!walletAddress) return;
+    // Safety check: Don't fetch if wallet is not connected or address is missing
+    if (!walletAddress || walletAddress === "8xK9mBzLpQRnVwT3cY7dFhJeN2sAuXiCvMoP4gS5tEq") {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
       const [bal, tok] = await Promise.all([
-        getBalance(walletAddress),
+        getBalance(walletAddress).catch(() => ({ balance: 0, availableCredit: 0 })),
         Promise.resolve(getMockTokenBalances()),
       ]);
       setBalance(bal);
       setTokens(tok);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to fetch balance");
+      console.warn("Silent balance fetch failure:", e);
+      // Don't set error state to keep UI clean during transitions
     } finally {
       setLoading(false);
     }

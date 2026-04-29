@@ -24,16 +24,21 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
-import Header from "@/components/Lamyt/Header";
-import Footer from "@/components/Lamyt/Footer";
+import Header from "@/components/cardbridger/Header";
+import Footer from "@/components/cardbridger/Footer";
 import Topup from "@/app/card/topup";
 import { getMockCardState, getMockCollateralPosition } from "@/lib/anchor-client";
 import { updateCardSettings } from "@/lib/api-client";
 import { formatCurrency } from "@/lib/utils";
+import Link from "next/link";
 
-const MOCK_WALLET = "8xK9mBzLpQRnVwT3cY7dFhJeN2sAuXiCvMoP4gS5tEq";
+import { useWallet } from "@solana/wallet-adapter-react";
+
 
 export default function CardPage() {
+  const { publicKey } = useWallet();
+  const walletAddress = publicKey?.toBase58() ;
+
   const [cardState, setCardState] = useState(getMockCardState());
   const position = getMockCollateralPosition();
   const [showDetails, setShowDetails] = useState(false);
@@ -42,9 +47,10 @@ export default function CardPage() {
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   const toggleFreeze = async () => {
+    if (!walletAddress) return;
     setSaving(true);
     await updateCardSettings({
-      walletAddress: MOCK_WALLET,
+      walletAddress,
       isFrozen: !cardState.isFrozen,
     });
     setCardState((prev) => ({ ...prev, isFrozen: !prev.isFrozen }));
@@ -52,17 +58,19 @@ export default function CardPage() {
   };
 
   const toggleMode = async () => {
+    if (!walletAddress) return;
     const newMode = cardState.mode === "credit" ? "debit" : "credit";
     setSaving(true);
-    await updateCardSettings({ walletAddress: MOCK_WALLET, mode: newMode });
+    await updateCardSettings({ walletAddress, mode: newMode });
     setCardState((prev) => ({ ...prev, mode: newMode }));
     setSaving(false);
   };
 
   const saveSpendingLimit = async () => {
+    if (!walletAddress) return;
     setSaving(true);
     await updateCardSettings({
-      walletAddress: MOCK_WALLET,
+      walletAddress,
       spendingLimit: spendingLimit[0],
     });
     setCardState((prev) => ({ ...prev, spendingLimit: spendingLimit[0] }));
@@ -188,6 +196,17 @@ export default function CardPage() {
                       <SnowflakeIcon className="w-4 h-4" />
                     )}
                     {cardState.isFrozen ? "Unfreeze" : "Freeze"}
+                  </Button>
+                  <Button
+                    variant="gradient"
+                    size="sm"
+                    className="col-span-2 mt-2"
+                    asChild
+                  >
+                    <Link href="/nfc/tap">
+                      <Smartphone className="w-4 h-4 mr-2" />
+                      Provision for Apple/Google Pay
+                    </Link>
                   </Button>
                 </div>
               </div>
@@ -430,7 +449,7 @@ export default function CardPage() {
           <TabsContent value="topup">
             <div className="max-w-lg">
               <Topup
-                walletAddress={MOCK_WALLET}
+                walletAddress={walletAddress || ""}
                 currentCollateralUsd={position.collateralUsdValue}
                 availableCredit={position.maxBorrowable}
               />

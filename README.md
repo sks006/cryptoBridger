@@ -106,7 +106,7 @@ NEXT_PUBLIC_JUPITER_API_URL=https://quote-api.jup.ag/v4
 
 1. Connect your Solana wallet
 2. Deposit collateral (SOL or supported tokens)
-3. Activate your virtual Lamyt Card
+3. Activate your virtual crypto to a flat Card
 4. Start spending and earning rewards
 
 ### For Developers
@@ -119,104 +119,142 @@ NEXT_PUBLIC_JUPITER_API_URL=https://quote-api.jup.ag/v4
 ## 🏗 Architecture
 
 ```
-├── apps
-│   └── web
-│       ├── AGENTS.md
-│       ├── bun.lock
-│       ├── eslint.config.mjs
-│       ├── next.config.ts
-│       ├── next-env.d.ts
-│       ├── package.json
-│       ├── package-lock.json
-│       ├── postcss.config.mjs
-│       ├── src
-│       │   ├── app
-│       │   │   ├── card
-│       │   │   ├── dashboard
-│       │   │   ├── favicon.ico
-│       │   │   ├── globals.css
-│       │   │   ├── lamyt.tsx
-│       │   │   ├── layout.tsx
-│       │   │   ├── page.tsx
-│       │   │   ├── pos-simulator
-│       │   │   └── swap
-│       │   ├── components
+crypto-fiat-card-mvp/
+
+├── apps/
+│   ├── web/                          # Your existing Next.js frontend (kept mostly unchanged)
+│   │   ├── src/
+│   │   │   ├── app/
+│   │   │   │   ├── lamyt.tsx
+│   │   │   │   ├── page.tsx                  # landing + connect wallet
+│   │   │   │   ├── dashboard/
+│   │   │   │   │   ├── page.tsx
+│   │   │   │   │   └── transactions.tsx
+│   │   │   │   ├── card/
+│   │   │   │   │   ├── page.tsx
+│   │   │   │   │   └── topup.tsx
+│   │   │   │   ├── swap/
+│   │   │   │   │   └── simulate.tsx
+│   │   │   │   ├── pos-simulator/
+│   │   │   │   │   └── page.tsx
+│   │   │   │   └── nfc/                      # NEW for web
+│   │   │   │       └── tap/page.tsx          # Web NFC demo page
+│   │   │   ├── components/
+│   │   │   │   ├── WalletConnect.tsx
+│   │   │   │   ├── HealthFactorMeter.tsx
+│   │   │   │   ├── CardBalance.tsx
+│   │   │   │   ├── NFCRingAnimation.tsx
+│   │   │   │   └── NFCTapButton.tsx          # NEW: Simulate / Real Web NFC button
+│   │   │   ├── lib/
+│   │   │   │   ├── solana.ts
+│   │   │   │   ├── jupiter.ts
+│   │   │   │   ├── anchor-client.ts
+│   │   │   │   ├── api-client.ts
+│   │   │   │   └── nfc/
+│   │   │   │       ├── web-nfc.ts            # Web NFC API
+│   │   │   │       └── mock-nfc.ts           # Fallback simulation
+│   │   │   └── hooks/
+│   │   │       ├── useHealthFactor.ts
+│   │   │       ├── useCardBalance.ts
+│   │   │       └── useNFCTap.ts              # Unified hook (Web + Mock)
+│   │   ├── public/
+│   │   ├── next.config.js
+│   │   ├── tailwind.config.ts
+│   │   └── package.json
+│   │
+│   └── mobile/                              # ✦ NEW — simplified RN app
+│       ├── src/
+│       │   ├── app/
+│       │   │   ├── index.tsx               # wallet connect entry
+│       │   │   ├── dashboard/
+│       │   │   │   └── screen.tsx
+│       │   │   ├── card/
+│       │   │   │   └── screen.tsx
+│       │   │   └── nfc/
+│       │   │       ├── TapScreen.tsx       # ✦ NFC tap UI (mock)
+│       │   │       └── MockProvision.tsx   # ✦ simulated card-to-wallet flow
+│       │   ├── components/
+│       │   │   ├── WalletConnect.tsx
 │       │   │   ├── CardBalance.tsx
-│       │   │   ├── HealthFactorMeter.tsx
-│       │   │   ├── Lamyt
-│       │   │   ├── ui
-│       │   │   └── WalletConnect.tsx
-│       │   ├── hooks
-│       │   │   ├── useCardBalance.ts
-│       │   │   └── useHealthFactor.ts
-│       │   └── lib
+│       │   │   └── NFCRingAnimation.tsx    # ✦ simple tap pulse
+│       │   └── lib/
+│       │       ├── solana.ts
+│       │       ├── jupiter.ts
 │       │       ├── anchor-client.ts
 │       │       ├── api-client.ts
-│       │       ├── jupiter.ts
-│       │       ├── solana.ts
-│       │       └── utils.ts
-│       └── tsconfig.json
-├── backend
-│   ├── Cargo.lock
-│   ├── Cargo.toml
-│   ├── src
-│   │   ├── handlers
+│       │       └── nfc/
+│       │           ├── nfc-manager.ts      # ✦ react-native-nfc-manager wrapper
+│       │           └── mock-hce.ts         # ✦ Android HCE stub (logs APDU)
+│       ├── android/
+│       │   └── app/src/main/
+│       │       ├── AndroidManifest.xml     # ✦ NFC + HCE permissions
+│       │       └── java/.../
+│       │           └── HCEService.java     # ✦ stub HostApduService
+│       ├── ios/
+│       │   └── CryptoCardMVP/
+│       │       └── Info.plist              # ✦ NFCReaderUsageDescription
+│       ├── package.json
+│       ├── metro.config.js
+│       └── app.json
+│
+├── programs/
+|   ├── lending-vault/                      Your existing fixed lending protocol —
+|   │   ├── src/
+|   │   │   ├── lib.rs
+|   │   │   ├── instructions/
+|   │   │   │   ├── deposit.rs
+|   │   │   │   ├── withdraw.rs
+|   │   │   │   ├── borrow.rs                  # reads Pyth price feed
+|   │   │   │   ├── repay.rs
+|   │   │   │   └── liquidate.rs               # reads Pyth price feed
+|   │   │   ├── state/
+|   │   │   │   ├── vault.rs                   # includes price_feed Pubkey
+|   │   │   │   └── user_position.rs
+|   │   │   └── error.rs
+|   │   ├── Anchor.toml
+|   │   └── Cargo.toml                         # + pyth-sdk-solana
+│
+├── backend/
+│   ├── src/
 │   │   ├── main.rs
-│   │   ├── modules
-│   │   ├── solana
-│   │   ├── state
-│   │   └── utils
-│   └── target
-│       ├── CACHEDIR.TAG
-│       ├── debug
-│       │   ├── build
-│       │   ├── deps
-│       │   │   ├── backend-15d90d440c77bbf3.d
-│       │   │   ├── backend-98cbaac38c2d0db0.d
-│       │   │   ├── libbackend-15d90d440c77bbf3.rmeta
-│       │   │   └── libbackend-98cbaac38c2d0db0.rmeta
-│       │   ├── examples
-│       │   └── incremental
-│       │       ├── backend-05eekkbpzwlfx
-│       │       └── backend-0gci9cug64eun
-│       └── flycheck0
-│           ├── stderr
-│           └── stdout
-├── docs
-│   ├── adr
-│   ├── compliance
-│   ├── research
-│   └── whitepaper
-├── infrastructure
-│   ├── docker
-│   ├── kubernetes
-│   └── terraform
-├── packages
-│   ├── core
-│   ├── sdk
-│   └── ui
-├── programs
-│   └── lending_vault
-│       ├── Anchor.toml
-│       ├── Cargo.toml
-│       └── src
-│           ├── Anchor.toml
-│           ├── Cargo.toml
-│           ├── error.rs
-│           ├── instructions
-│           │   ├── borrow.rs
-│           │   ├── deposit.rs
-│           │   ├── liquidate.rs
-│           │   ├── repay.rs
-│           │   └── withdraw.rs
-│           ├── lib.rs
-│           └── state
-│               ├── user_position.rs
-│               └── vault.rs
-├── README.md
-├── scripts
-└── tests
-    └── e2e
+│   │   ├── handlers/
+│   │   │   ├── health.rs
+│   │   │   ├── auth.rs
+│   │   │   ├── card.rs
+│   │   │   ├── swipe.rs
+│   │   │   └── nfc.rs                      # ✦ NEW
+│   │   │       # POST /nfc/tap  → mock JIT, returns receipt JSON
+│   │   │       # POST /nfc/provision → returns mock token { pan_token, exp }
+│   │   ├── solana/
+│   │   │   ├── client.rs
+│   │   │   ├── vault_ix.rs
+│   │   │   └── jupiter_quote.rs
+│   │   ├── state/
+│   │   │   ├── memory_store.rs             # HashMap<UserId, Session>
+│   │   │   └── nfc_store.rs                # ✦ HashMap<DeviceId, MockToken>
+│   │   └── utils/
+│   │       ├── ltv.rs
+│   │       └── nfc_nonce.rs                # ✦ one-time nonce gen (in-memory)
+│   ├── Cargo.toml
+│   └── .env
+│
+├── docs/
+│   └── whitepaper/
+│       ├── MiCA_summary.md
+│       └── nfc_flow_notes.md               # ✦ APDU tap → mock JIT diagram
+│
+├── scripts/
+│   ├── deploy-program.sh
+│   ├── seed-mock-users.sh
+│   └── simulate-nfc-tap.sh                 # ✦ curl POST /nfc/tap shortcut
+│
+├── tests/
+│   └── e2e/
+│       ├── swipe.test.ts
+│       └── nfc_tap.test.ts                 # ✦ Detox NFC mock tap test
+│
+├── HACKATHON_README.md
+└── .gitignore
 ```
 
 
