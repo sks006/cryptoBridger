@@ -5,14 +5,17 @@ interface NFCRingAnimationProps {
   ringAnim: Animated.Value;
 }
 
-export const NFCRingAnimation: React.FC<NFCRingAnimationProps> = ({ ringAnim }) => {
+export const NFCRingAnimation: React.FC<{ ringAnim: Animated.Value<number> }> = ({ ringAnim }) => {
   return (
     <Animated.View 
       style={[
         styles.ring, 
         { 
           transform: [{ scale: ringAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 2] }) }],
-          opacity: ringAnim.interpolate({ inputRange: [0, 1], outputRange: [0.6, 0] })
+          opacity: ringAnim.interpolate({
+            inputRange: [0, 1],
+            outputRange: [0.6, 0]
+          }),
         }
       ]} 
     />
