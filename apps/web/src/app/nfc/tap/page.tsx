@@ -1,164 +1,191 @@
 // apps/web/src/app/nfc/tap/page.tsx
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
-import { NFCTapButton } from "@/components/NFCTapButton";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { AlertCircle, Loader2, CheckCircle } from "lucide-react";
-
+import { useState, useRef, useCallback, useMemo, useEffect } from "react";
+import Link from "next/link";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { useHealthFactor } from "@/hooks/useHealthFactor";
-import { useNFCTap } from "@/hooks/useNFCTap";
-
-import { WebNFCManager } from "@/lib/nfc/web-nfc";
-import { useAnchorProvider } from "@/hooks/useAnchorProvider";
-import { buildDepositTransaction } from "@/lib/anchor-client";
+import { useAnchorProvider } from "../../../hooks/useAnchorProvider";
+import { useHealthFactor } from "../../../hooks/useHealthFactor";
+import { useSolPrice } from "../../../hooks/useSolPrice";
 import {
-  NATIVE_MINT,
+  getLendingProgram,
+  getVaultPda,
+  getUserPositionPda,
+  EURC_MINT,
+  buildBorrowTransaction,
+} from "../../../lib/anchor-client";
+import { SOL_USD_PRICE_UPDATE, EUR_USD_PRICE_UPDATE } from "../../../lib/pyth-feeds";
+import {
+  WebNFCManager,
+  type NFCTapState,
+  type NFCReceipt,
+  type MerchantPayload,
+} from "../../../lib/nfc/web-nfc";
+
+import Header from "../../../components/cardbridger/Header";
+import Footer from "../../../components/cardbridger/Footer";
+import DepositCollateral from "../../../components/cardbridger/DepositCollateral";
+import MerchantTagWriter from "../../../components/cardbridger/MerchantTagWriter";
+
+import {
+  PublicKey,
+  Transaction,
+  SystemProgram,
+  SYSVAR_CLOCK_PUBKEY,
+} from "@solana/web3.js";
+import {
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddress,
   createAssociatedTokenAccountInstruction,
-  createSyncNativeInstruction,
+  createTransferInstruction,
 } from "@solana/spl-token";
-import { Transaction, SystemProgram } from "@solana/web3.js";
+import { BN } from "@coral-xyz/anchor";
+
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import {
+  Smartphone,
+  Store,
+  Wallet,
+  Activity,
+  ShieldCheck,
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
+  ExternalLink,
+  RotateCcw,
+  Radio,
+} from "lucide-react";
+
+const QUICK_EUR_AMOUNTS = [5, 10, 25, 50, 100];
+
+const STATE_LABEL: Record<NFCTapState, string> = {
+  idle: "Ready to pay",
+  scanning: "Hold near merchant tag…",
+  reading: "Tag detected — verifying",
+  borrowing: "Borrowing EURC on Solana…",
+  logging: "Confirming receipt…",
+  success: "Payment confirmed",
+  error: "Payment failed",
+};
 
 export default function NFCTapPage() {
-  const { connected, publicKey, signTransaction } = useWallet();
+  const { publicKey, signTransaction } = useWallet();
+  const provider = useAnchorProvider();
+
+  // ---- live data ---------------------------------------------------------
   const {
     position,
     healthFactor,
-    loading: healthLoading,
-    refresh: refreshHealth,
+    riskColor,
+    riskLabel,
+    refresh: refreshPosition,
+    solPriceUsd,
   } = useHealthFactor();
-  const { state, error, receipt, startTap, reset } = useNFCTap();
+  const { solUsd, eurUsd, solEur, publishTimeMs } = useSolPrice();
 
-  const provider = useAnchorProvider();
-  const nfcManagerRef = useRef<WebNFCManager | null>(null);
-
-  // Local State
+  // ---- ui state ----------------------------------------------------------
+  const [mode, setMode] = useState<"sender" | "receiver">("sender");
   const [amount, setAmount] = useState<number>(5);
-  const [mounted, setMounted] = useState(false);
-  const [scanning, setScanning] = useState(false);
+  const [nfcState, setNfcState] = useState<NFCTapState>("idle");
+  const [receipt, setReceipt] = useState<NFCReceipt | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  // Deposit State
-  const [depositAmount, setDepositAmount] = useState<string>("");
-  const [depositLoading, setDepositLoading] = useState(false);
-  const [depositError, setDepositError] = useState<string | null>(null);
-  const [depositSuccess, setDepositSuccess] = useState(false);
+  const nfcManagerRef = useRef<WebNFCManager | null>(null);
+  if (!nfcManagerRef.current) nfcManagerRef.current = new WebNFCManager();
 
-  // Derived
-  const collateralUsd = position?.collateralUsdValue || 0;
-  const maxSpend = position?.maxBorrowable || 0;
-  const isOverLimit = amount > maxSpend;
-  const availableCreditPercent =
-    collateralUsd > 0 ? Math.min((maxSpend / collateralUsd) * 100, 100) : 0;
+  // ---- derived limits ---------------------------------------------------
+  const collateralUsd = position?.collateralUsdValue ?? 0;
+  const availableCreditUsd = position?.maxBorrowable ?? 0;
+  // Convert the USD-denominated max borrow to EUR using live EUR/USD
+  const availableCreditEur =
+    eurUsd && eurUsd > 0 ? availableCreditUsd / eurUsd : availableCreditUsd;
 
-  useEffect(() => {
-    setMounted(true);
-    if (!nfcManagerRef.current) {
-      nfcManagerRef.current = new WebNFCManager();
-    }
-  }, []);
+  const isOverLimit = amount > availableCreditEur;
+  const tooLowHF = healthFactor < 1.2;
+  const canTap =
+    !!publicKey &&
+    amount > 0 &&
+    !isOverLimit &&
+    !tooLowHF &&
+    nfcState === "idle";
 
-  // Auto-adjust amount
-  useEffect(() => {
-    if (amount > maxSpend && maxSpend > 0) {
-      setAmount(Math.floor(maxSpend));
-    }
-  }, [maxSpend, amount]);
+  const nfcSupported =
+    typeof window !== "undefined" && WebNFCManager.isSupported();
 
-  const handleQuickAmount = (val: number) => {
-    if (val <= maxSpend) setAmount(val);
-  };
+  const borrowAndGetSignature = useCallback(
+    async (
+      eurcAmount: number,
+      merchant: MerchantPayload,
+    ): Promise<string> => {
+      if (!publicKey || !provider || !signTransaction) {
+        throw new Error("Wallet not connected");
+      }
+      if (!merchant.recipient) {
+        throw new Error("Merchant tag is missing the recipient address");
+      }
 
-  // ==================== REAL NFC TAP HANDLER ====================
-  const handleNfcTap = async () => {
-    if (!publicKey || !provider || !signTransaction) {
-      alert("Please connect your wallet");
-      return;
-    }
-    if (amount <= 0 || isOverLimit) return;
+      const recipientPubkey = new PublicKey(merchant.recipient);
+      const eurcMint = EURC_MINT;
 
-    setScanning(true);
+      const program = getLendingProgram(provider);
+      const vaultPda = getVaultPda();
+      const userPositionPda = getUserPositionPda(publicKey);
+      const userEurcAta = await getAssociatedTokenAddress(eurcMint, publicKey);
 
-    try {
-      await nfcManagerRef.current!.startScan({
-        amount,
-        walletAddress: publicKey.toBase58(),
-        onStateChange: (newState) => {
-          if (newState === "success" || newState === "error") {
-            setScanning(false);
-          }
-        },
-        onReceipt: (data) => {
-          // Success path
-          console.log("✅ NFC Payment Receipt:", data);
-        },
-        onError: (err) => {
-          console.error("NFC Error:", err);
-          setScanning(false);
-        },
-      });
-    } catch (err: any) {
-      console.error(err);
-      setScanning(false);
-    }
-  };
-  // ==================== DEPOSIT HANDLER ====================
-  const handleDeposit = async () => {
-    const solAmount = parseFloat(depositAmount);
-    if (
-      !solAmount ||
-      solAmount <= 0 ||
-      !publicKey ||
-      !signTransaction ||
-      !provider
-    )
-      return;
+      const amountMicro = new BN(Math.round(eurcAmount * 1e6));
 
-    setDepositLoading(true);
-    setDepositError(null);
-    setDepositSuccess(false);
+      const borrowIx = await (program.methods as any)
+        .borrow(amountMicro)
+        .accounts({
+          user: publicKey,
+          vault: vaultPda,
+          userPosition: userPositionPda,
+          eurcMint,
+          userEurcAccount: userEurcAta,
+          solPriceUpdate: SOL_USD_PRICE_UPDATE,
+          eurPriceUpdate: EUR_USD_PRICE_UPDATE,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          clock: SYSVAR_CLOCK_PUBKEY,
+        })
+        .instruction();
 
-    try {
-      const depositTx = await buildDepositTransaction(
-        publicKey,
-        solAmount,
-        provider,
+      const recipientEurcAta = await getAssociatedTokenAddress(
+        eurcMint,
+        recipientPubkey,
       );
-
-      const wSolAta = await getAssociatedTokenAddress(
-        NATIVE_MINT,
-        publicKey,
-        false,
+      const recipientAtaInfo = await provider.connection.getAccountInfo(
+        recipientEurcAta,
       );
-      const accountInfo = await provider.connection.getAccountInfo(wSolAta);
 
       const tx = new Transaction();
-
-      if (!accountInfo) {
+      if (!recipientAtaInfo) {
         tx.add(
           createAssociatedTokenAccountInstruction(
             publicKey,
-            wSolAta,
-            publicKey,
-            NATIVE_MINT,
+            recipientEurcAta,
+            recipientPubkey,
+            eurcMint,
           ),
         );
       }
 
+      tx.add(borrowIx);
       tx.add(
-        SystemProgram.transfer({
-          fromPubkey: publicKey,
-          toPubkey: wSolAta,
-          lamports: solAmount * 1_000_000_000,
-        }),
+        createTransferInstruction(
+          userEurcAta,
+          recipientEurcAta,
+          publicKey,
+          Math.round(eurcAmount * 1e6),
+        ),
       );
-      tx.add(createSyncNativeInstruction(wSolAta));
-      tx.add(depositTx.instructions[0]);
 
-      const { blockhash } =
+      const { blockhash, lastValidBlockHeight } =
         await provider.connection.getLatestBlockhash("confirmed");
       tx.recentBlockhash = blockhash;
       tx.feePayer = publicKey;
@@ -167,300 +194,481 @@ export default function NFCTapPage() {
       const signature = await provider.connection.sendRawTransaction(
         signed.serialize(),
       );
+      await provider.connection.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        "confirmed",
+      );
 
-      // Confirm in background
-      provider.connection
-        .confirmTransaction(signature, "confirmed")
-        .catch(console.error);
+      return signature;
+    },
+    [publicKey, provider, signTransaction],
+  );
 
-      setDepositSuccess(true);
-      setDepositAmount("");
+  const handleStartScan = useCallback(async () => {
+    setError(null);
+    setReceipt(null);
 
-      // Refresh position
-      refreshHealth?.();
-      // cardBalance.refresh?.(); // uncomment if you have this hook
-    } catch (err: any) {
-      console.error(err);
-      setDepositError(err.message || "Deposit failed");
-    } finally {
-      setDepositLoading(false);
+    if (!publicKey) {
+      setError("Connect your Solana wallet first.");
+      setNfcState("error");
+      return;
     }
-  };
+    if (tooLowHF) {
+      setError("Health factor too low. Add more collateral before spending.");
+      setNfcState("error");
+      return;
+    }
+    if (isOverLimit) {
+      setError(
+        `Amount exceeds your available credit (€${availableCreditEur.toFixed(2)}).`,
+      );
+      setNfcState("error");
+      return;
+    }
 
-  if (!mounted) return null;
+    if (!nfcSupported) {
+      // Fallback: directly trigger the borrow with no tag (single-phone demo)
+      try {
+        setNfcState("borrowing");
+        const sig = await borrowAndGetSignature(amount, {
+          merchant: "Direct Pay (no NFC)",
+          amount: amount.toFixed(2),
+          currency: "EUR",
+        });
+        setReceipt({
+          receiptId: `RCPT-${Date.now().toString(36).toUpperCase()}`,
+          amount,
+          merchantName: "Direct Pay (no NFC)",
+          timestamp: new Date().toISOString(),
+          txHash: sig,
+          message: "Borrowed on Solana without NFC scan",
+        });
+        setNfcState("success");
+        refreshPosition();
+      } catch (e: any) {
+        setError(e?.message ?? "Borrow failed");
+        setNfcState("error");
+      }
+      return;
+    }
 
-  if (!connected || !publicKey) {
-    return (
-      <main className="min-h-screen flex flex-col items-center justify-center gap-8 px-4 py-12 bg-background">
-        <div className="text-center space-y-2 max-w-sm">
-          <h1 className="text-3xl font-bold tracking-tight">NFC Tap-to-Pay</h1>
-          <p className="text-sm text-muted-foreground">
-            Connect your Solana wallet to start spending without selling your
-            crypto.
-          </p>
-        </div>
-      </main>
+    // Real NFC scan path
+    await nfcManagerRef.current!.startScan({
+      amount,
+      walletAddress: publicKey.toBase58(),
+      onStateChange: setNfcState,
+      onReceipt: (r) => {
+        setReceipt(r);
+        refreshPosition();
+      },
+      onError: (msg) => setError(msg),
+      borrowAndGetSignature,
+    });
+  }, [
+    publicKey,
+    amount,
+    tooLowHF,
+    isOverLimit,
+    availableCreditEur,
+    nfcSupported,
+    borrowAndGetSignature,
+    refreshPosition,
+  ]);
+
+  const handleReset = useCallback(() => {
+    nfcManagerRef.current?.stopScan();
+    setNfcState("idle");
+    setError(null);
+    setReceipt(null);
+  }, []);
+
+  // Stop any in-flight scan if the user navigates away
+  useEffect(() => {
+    return () => nfcManagerRef.current?.stopScan();
+  }, []);
+
+  const isProcessing =
+    nfcState === "scanning" ||
+    nfcState === "reading" ||
+    nfcState === "borrowing" ||
+    nfcState === "logging";
+
+  const priceTimeAgo = useMemo(() => {
+    if (!publishTimeMs) return null;
+    const seconds = Math.max(
+      0,
+      Math.round((Date.now() - publishTimeMs) / 1000),
     );
-  }
-
-  if (healthLoading && !position) {
-    return (
-      <main className="min-h-screen flex flex-col items-center justify-center gap-4 px-4 py-12 bg-background">
-        <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
-        <p className="text-muted-foreground">Loading your position...</p>
-      </main>
-    );
-  }
+    return `${seconds}s ago`;
+  }, [publishTimeMs, solUsd]);
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center gap-8 px-4 py-12 bg-background">
-      <div className="text-center space-y-2 max-w-sm">
-        <h1 className="text-3xl font-bold tracking-tight">Tap to Pay</h1>
-        <p className="text-sm text-muted-foreground">
-          Spend crypto without selling it — powered by Solana
-        </p>
-      </div>
-      {/* === DEPOSIT COLLATERAL CARD === */}
-      <Card className="relative w-full max-w-sm overflow-hidden border-zinc-800 bg-zinc-950 shadow-2xl transition-all duration-300 hover:shadow-emerald-500/20 group">
-        {/* Decorative Top Glow Effect */}
-        <div className="absolute -top-24 -left-24 h-48 w-48 rounded-full bg-emerald-500/10 blur-[80px] group-hover:bg-emerald-500/20 transition-colors" />
+    <div className="min-h-screen flex flex-col animated-gradient">
+      <Header />
 
-        <CardContent className="relative pt-8 pb-8 space-y-6">
-          {/* Header with improved spacing and accent */}
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold text-emerald-500 uppercase tracking-[0.2em]">
-              Deposit Collateral
-            </h3>
-            <div className="h-1 w-12 rounded-full bg-zinc-800" />
-          </div>
-
-          <div className="space-y-4">
-            {/* Input Section - Floating Label Style Look */}
-            <div className="relative group">
-              {/* Subtitle/Label for extra clarity */}
-              <Input
-                type="number"
-                placeholder="0.00"
-                value={depositAmount}
-                onChange={(e) => setDepositAmount(e.target.value)}
-                disabled={depositLoading}
-                className={`
-      h-16 text-2xl font-mono transition-all duration-200
-      /* Text Colors - Forced Visibility */
-      text-slate-50 placeholder:text-zinc-600
-      /* Background & Border */
-      bg-zinc-950 border-zinc-800 
-      /* Focus States - High Contrast Emerald */
-      focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10
-      /* Spacing */
-      pl-4 pr-16
-      /* Disabled State */
-      disabled:opacity-50 disabled:cursor-not-allowed
-    `}
-                step="0.01"
-              />
-
-              {/* The Currency Badge - Increased Visibility */}
-              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2 pointer-events-none">
-                <div className="h-6 w-[1px] bg-zinc-800 mx-1" />{" "}
-                {/* Visual Separator */}
-                <span className="font-black text-emerald-500 text-sm tracking-tighter">
-                  SOL
-                </span>
-              </div>
-            </div>
-
-            {/* Button with Neon Glow and Scale Effect */}
-            <Button
-              variant="default"
-              className="relative w-full h-12 bg-emerald-600 hover:bg-emerald-500 text-white font-bold transition-all duration-200 active:scale-[0.98] shadow-[0_0_20px_rgba(16,185,129,0.2)] hover:shadow-[0_0_30px_rgba(16,185,129,0.4)]"
-              onClick={handleDeposit}
-              disabled={depositLoading || !depositAmount}
-            >
-              {depositLoading ? (
-                <div className="flex items-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Processing...</span>
-                </div>
-              ) : (
-                "Deposit Assets"
-              )}
-            </Button>
-
-            {/* Status Messages with micro-animations */}
-            <div className="min-h-[20px]">
-              {depositError && (
-                <p className="text-xs text-red-400 font-medium flex items-center gap-2 animate-in fade-in slide-in-from-top-1">
-                  <AlertCircle className="w-3.5 h-3.5" /> {depositError}
-                </p>
-              )}
-              {depositSuccess && (
-                <p className="text-xs text-emerald-400 font-medium flex items-center gap-2 animate-in fade-in slide-in-from-top-1">
-                  <CheckCircle className="w-3.5 h-3.5" /> Transaction Confirmed
-                </p>
-              )}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      {/* Account Summary */}
-      <Card className="w-full max-w-sm border-none bg-gradient-to-br from-zinc-900 to-black shadow-2xl shadow-emerald-500/10">
-        <CardContent className="pt-6 space-y-6">
-          <div className="flex justify-between items-end">
-            <div>
-              <p className="text-xs font-semibold text-emerald-500/80 uppercase tracking-wider mb-1">
-                Collateral Balance
-              </p>
-              <p className="text-3xl font-bold text-white tracking-tight">
-                ${collateralUsd.toFixed(2)}
-              </p>
-            </div>
-            <div className="text-right">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">
-                Health Factor
-              </p>
-              <p
-                className={`text-2xl font-bold tabular-nums ${
-                  healthFactor >= 2.0
-                    ? "text-emerald-400"
-                    : healthFactor >= 1.5
-                      ? "text-yellow-400"
-                      : "text-red-400"
-                }`}
-              >
-                {healthFactor > 100 ? "∞" : healthFactor.toFixed(2)}x
-              </p>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex justify-between text-xs font-medium">
-              <span className="text-zinc-400">Available Credit</span>
-              <span className="text-white">${maxSpend.toFixed(2)}</span>
-            </div>
-            <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-emerald-500 to-cyan-500 rounded-full transition-all duration-1000"
-                style={{ width: `${availableCreditPercent}%` }}
-              />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Amount Input + Quick Buttons */}
-      <div className="w-full max-w-sm space-y-6">
-        <div className="space-y-3">
-          <div className="flex items-end justify-between px-1">
-            <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-emerald-500">
-              Payment Amount
-            </label>
-            <span
-              className={`text-xs font-mono transition-colors ${isOverLimit ? "text-red-400" : "text-zinc-500"}`}
-            >
-              Limit: €{maxSpend.toFixed(2)}
-            </span>
-          </div>
-
-          {/* The Dynamic Input Container */}
-          <div className="relative group">
-            {/* Dynamic Glow Background */}
-            <div
-              className={`absolute -inset-1 rounded-xl bg-gradient-to-r ${isOverLimit ? "from-red-500/20 to-orange-500/20" : "from-emerald-500/20 to-zinc-500/10"} blur-lg opacity-100 transition-all`}
-            />
-
-            <div className="relative">
-              <Input
-                type="number"
-                value={amount || ""}
-                onChange={(e) =>
-                  setAmount(Math.max(0, parseFloat(e.target.value) || 0))
-                }
-                placeholder="0.00"
-                className={`
-            h-20 text-3xl font-mono transition-all duration-200
-            /* Visibility & Contrast */
-            text-slate-50 placeholder:text-zinc-700
-            /* Background & Border */
-            bg-zinc-950 border-zinc-800 
-            /* Focus Logic */
-            focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/10
-            /* Padding for the symbol */
-            pl-6 pr-20
-          `}
-                step="0.01"
-                min="0"
-              />
-
-              {/* Currency Badge with Separator - Matching Deposit Style */}
-              <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-3 pointer-events-none">
-                <div className="h-8 w-[1px] bg-zinc-800" />
-                <span className="font-black text-emerald-500 text-lg tracking-tighter">
-                  EURC
-                </span>
-              </div>
-            </div>
-          </div>
+      <main className="flex-1 container mx-auto px-4 py-8 md:py-12">
+        {/* Hero */}
+        <div className="text-center max-w-xl mx-auto mb-8">
+          <h1 className="text-3xl md:text-4xl font-bold tracking-tight mb-2">
+            Tap to Pay
+          </h1>
+          <p className="text-muted-foreground">
+            Spend crypto without selling — powered by Solana
+          </p>
         </div>
 
-        {/* Quick Selection Grid */}
-        <div className="grid grid-cols-5 gap-2">
-          {[5, 10, 15, 25, 50].map((val) => {
-            const isSelected = amount === val;
-            const isDisabled = val > maxSpend;
-
-            return (
-              <button
-                key={val}
-                onClick={() => handleQuickAmount(val)}
-                disabled={isDisabled}
-                className={`
-            py-3 rounded-lg text-xs font-mono font-bold transition-all
-            ${
-              isSelected
-                ? "bg-emerald-600 text-white shadow-[0_0_15px_rgba(16,185,129,0.3)] scale-105"
-                : "bg-zinc-900 text-zinc-400 border border-zinc-800 hover:border-zinc-700"
-            }
-            ${isDisabled ? "opacity-20 cursor-not-allowed" : "active:scale-95"}
-          `}
-              >
-                {val}
-              </button>
-            );
-          })}
+        {/* Live Pyth strip — front-and-center proof that prices are real */}
+        <div className="max-w-xl mx-auto mb-8">
+          <Card className="border border-emerald-500/20 bg-gradient-to-r from-emerald-500/5 via-cyan-500/5 to-emerald-500/5">
+            <CardContent className="py-3 px-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-emerald-300">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                </span>
+                Live Pyth Oracle
+              </div>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+                <span>
+                  <span className="text-muted-foreground">SOL/USD</span>{" "}
+                  <span className="font-semibold tabular-nums">
+                    {solUsd ? `$${solUsd.toFixed(2)}` : "—"}
+                  </span>
+                </span>
+                <span>
+                  <span className="text-muted-foreground">EUR/USD</span>{" "}
+                  <span className="font-semibold tabular-nums">
+                    {eurUsd ? eurUsd.toFixed(4) : "—"}
+                  </span>
+                </span>
+                {priceTimeAgo && (
+                  <span className="text-xs text-muted-foreground">
+                    · updated {priceTimeAgo}
+                  </span>
+                )}
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
-        {/* Status Alert */}
-        <div className="min-h-[60px]">
-          {isOverLimit && (
-            <div className="flex items-center gap-3 bg-red-500/5 border border-red-500/20 p-4 rounded-xl animate-in fade-in zoom-in-95">
-              <AlertCircle size={18} className="text-red-500" />
-              <div className="flex flex-col">
-                <span className="text-red-500 text-[10px] font-bold uppercase tracking-widest">
-                  Transaction Blocked
-                </span>
-                <span className="text-zinc-400 text-xs font-mono">
-                  Exceeds €{maxSpend.toFixed(2)} limit
-                </span>
+        {/* Mode toggle */}
+        <div className="flex justify-center gap-2 mb-8">
+          <Button
+            size="lg"
+            variant={mode === "sender" ? "gradient" : "outline"}
+            onClick={() => {
+              handleReset();
+              setMode("sender");
+            }}
+            className="min-w-[160px]"
+          >
+            <Wallet className="w-4 h-4 mr-2" />
+            Sender (Pay)
+          </Button>
+          <Button
+            size="lg"
+            variant={mode === "receiver" ? "gradient" : "outline"}
+            onClick={() => {
+              handleReset();
+              setMode("receiver");
+            }}
+            className="min-w-[160px]"
+          >
+            <Store className="w-4 h-4 mr-2" />
+            Receiver (Merchant)
+          </Button>
+        </div>
+
+        {/* ===== RECEIVER MODE ===== */}
+        {mode === "receiver" && (
+          <div className="max-w-md mx-auto">
+            <MerchantTagWriter />
+            <p className="text-center text-xs text-muted-foreground mt-6 max-w-sm mx-auto">
+              When the customer's phone touches yours, their CardBridger app
+              will read this request and execute a real{" "}
+              <code className="text-emerald-400">borrow</code> instruction
+              against the lending vault on Solana DevNet.
+            </p>
+          </div>
+        )}
+
+        {/* ===== SENDER MODE ===== */}
+        {mode === "sender" && (
+          <div className="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+            {/* LEFT — deposit + position */}
+            <div className="space-y-6">
+              <DepositCollateral
+                solPriceUsd={solPriceUsd}
+                onDeposited={() => refreshPosition()}
+              />
+
+              {/* Position summary card */}
+              <Card className="border border-border/60 bg-zinc-900/40">
+                <CardContent className="pt-6 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                      Your Position
+                    </h3>
+                    {publicKey && (
+                      <Badge variant="success" className="text-[10px]">
+                        <Activity className="w-3 h-3 mr-1" />
+                        live
+                      </Badge>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-xs text-muted-foreground">
+                        Collateral
+                      </p>
+                      <p className="text-2xl font-bold tabular-nums">
+                        ${collateralUsd.toFixed(2)}
+                      </p>
+                      {position && (
+                        <p className="text-xs text-muted-foreground">
+                          {position.collateralAmount.toFixed(4)} SOL
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">
+                        Health Factor
+                      </p>
+                      <p
+                        className={`text-2xl font-bold tabular-nums ${riskColor}`}
+                      >
+                        {healthFactor >= 9999 ? "∞" : healthFactor.toFixed(2)}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {riskLabel}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="pt-3 border-t border-border/60">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">
+                        Available credit
+                      </span>
+                      <span className="font-semibold text-emerald-400 tabular-nums">
+                        €{availableCreditEur.toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* RIGHT — payment + tap */}
+            <div className="space-y-6">
+              {/* Amount picker */}
+              <Card className="border border-border/60 bg-zinc-900/40">
+                <CardContent className="pt-6 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                      Payment Amount
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      Limit:{" "}
+                      <span className="text-emerald-400 font-medium">
+                        €{availableCreditEur.toFixed(2)}
+                      </span>
+                    </p>
+                  </div>
+
+                  <div className="relative">
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={amount || ""}
+                      onChange={(e) =>
+                        setAmount(parseFloat(e.target.value) || 0)
+                      }
+                      disabled={isProcessing}
+                      className="text-2xl font-bold h-14 pr-20 tabular-nums"
+                      placeholder="0.00"
+                    />
+                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-emerald-400">
+                      EURC
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-5 gap-2">
+                    {QUICK_EUR_AMOUNTS.map((amt) => (
+                      <button
+                        key={amt}
+                        type="button"
+                        onClick={() => setAmount(amt)}
+                        disabled={isProcessing}
+                        className={`py-2 rounded-lg border text-sm font-medium transition-colors ${
+                          amount === amt
+                            ? "border-emerald-500 bg-emerald-500/15 text-emerald-300"
+                            : "border-border bg-secondary/40 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                        }`}
+                      >
+                        {amt}
+                      </button>
+                    ))}
+                  </div>
+
+                  {isOverLimit && amount > 0 && (
+                    <div className="flex items-start gap-2 p-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-300">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      Exceeds available credit (€
+                      {availableCreditEur.toFixed(2)})
+                    </div>
+                  )}
+                  {tooLowHF && (
+                    <div className="flex items-start gap-2 p-2 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-xs text-yellow-200">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      Health factor below 1.2 — add collateral first
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Tap card */}
+              <Card className="border-2 border-emerald-500/30 bg-gradient-to-br from-zinc-900 via-emerald-950/10 to-black shadow-2xl shadow-emerald-500/10">
+                <CardContent className="pt-8 pb-8 text-center">
+                  <div className="mx-auto w-20 h-20 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mb-4">
+                    {isProcessing ? (
+                      <Loader2 className="w-10 h-10 text-emerald-400 animate-spin" />
+                    ) : nfcState === "success" ? (
+                      <CheckCircle2 className="w-10 h-10 text-emerald-400" />
+                    ) : nfcState === "error" ? (
+                      <AlertCircle className="w-10 h-10 text-red-400" />
+                    ) : (
+                      <Radio className="w-10 h-10 text-emerald-400" />
+                    )}
+                  </div>
+
+                  <p className="text-sm font-semibold tracking-wide uppercase text-emerald-300 mb-1">
+                    {STATE_LABEL[nfcState]}
+                  </p>
+                  <p className="text-3xl font-extrabold tabular-nums mb-1">
+                    €{amount.toFixed(2)}
+                  </p>
+                  <p className="text-xs text-muted-foreground mb-6">
+                    {nfcSupported
+                      ? "Tap your phone to a merchant tag"
+                      : "Web NFC unavailable — direct borrow mode"}
+                  </p>
+
+                  {nfcState === "idle" && (
+                    <Button
+                      onClick={handleStartScan}
+                      disabled={!canTap}
+                      size="xl"
+                      className="w-full h-14 text-base font-semibold bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white shadow-xl disabled:opacity-50"
+                    >
+                      <Smartphone className="mr-2 w-5 h-5" />
+                      {nfcSupported ? "Tap to Pay" : "Pay Now"}
+                    </Button>
+                  )}
+
+                  {(nfcState === "success" || nfcState === "error") && (
+                    <Button
+                      variant="outline"
+                      onClick={handleReset}
+                      className="w-full h-12"
+                    >
+                      <RotateCcw className="w-4 h-4 mr-2" />
+                      New Payment
+                    </Button>
+                  )}
+
+                  {/* Receipt */}
+                  {receipt && nfcState === "success" && (
+                    <div className="mt-6 text-left bg-zinc-950/60 rounded-lg border border-emerald-500/20 p-4 space-y-2">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Merchant</span>
+                        <span className="font-medium">
+                          {receipt.merchantName}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Amount</span>
+                        <span className="font-medium">
+                          €{receipt.amount.toFixed(2)} EURC
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Receipt</span>
+                        <span className="font-mono text-xs">
+                          {receipt.receiptId}
+                        </span>
+                      </div>
+                      <a
+                        href={`https://explorer.solana.com/tx/${receipt.txHash}?cluster=devnet`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center justify-center gap-1.5 mt-2 text-xs text-cyan-400 hover:text-cyan-300 font-medium"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        View transaction on Solana Explorer
+                      </a>
+                    </div>
+                  )}
+
+                  {/* Error */}
+                  {nfcState === "error" && error && (
+                    <p className="mt-4 text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+                      {error}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Trust footer */}
+              <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                Non-custodial · Wallet-signed · Pyth oracle-secured
               </div>
             </div>
-          )}
-        </div>
-      </div>
-      {/* === REAL NFC TAP BUTTON === */}
-      <NFCTapButton
-        amount={amount}
-        onTap={handleNfcTap} // ← Now triggers real NFC scan
-        state={scanning ? "scanning" : state}
-        error={error}
-        receipt={receipt}
-        onReset={reset}
-        disabled={isOverLimit || amount <= 0}
-      />
+          </div>
+        )}
 
-      <div className="text-center text-xs text-muted-foreground max-w-xs">
-        Tap your phone on a merchant NFC tag to pay with borrowed EURC
-      </div>
-    </main>
+        {/* Demo helper card — visible in BOTH modes */}
+        <div className="max-w-2xl mx-auto mt-12">
+          <Card className="border border-cyan-500/20 bg-cyan-500/5">
+            <CardContent className="py-4 px-5">
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                <span className="font-semibold text-cyan-300">
+                  Investor demo tip:
+                </span>{" "}
+                On the merchant phone, switch to{" "}
+                <span className="font-medium">Receiver (Merchant)</span>, write
+                a tag with an amount, then hold the customer's phone (in{" "}
+                <span className="font-medium">Sender (Pay)</span> mode) against
+                it. The customer's wallet will sign a real{" "}
+                <code className="text-emerald-400">borrow</code> instruction on
+                Solana DevNet, and the receipt links straight to the tx on
+                Solana Explorer. Get DevNet SOL from{" "}
+                <Link
+                  href="https://faucet.solana.com"
+                  className="underline text-cyan-400"
+                  target="_blank"
+                >
+                  faucet.solana.com
+                </Link>{" "}
+                and test EURC from{" "}
+                <Link
+                  href="https://faucet.circle.com"
+                  className="underline text-cyan-400"
+                  target="_blank"
+                >
+                  faucet.circle.com
+                </Link>
+                .
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      </main>
+
+      <Footer />
+    </div>
   );
 }
