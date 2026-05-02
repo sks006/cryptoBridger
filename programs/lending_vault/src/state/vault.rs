@@ -1,41 +1,38 @@
 use anchor_lang::prelude::*;
 
 #[account]
-#[derive(InitSpace)]  // Optimizes rent cost
+#[derive(InitSpace)]
 pub struct Vault {
-    /// Authority ( the founder/admin) — can update config later
+    /// Founder/admin authority — can update config later
     pub authority: Pubkey,
-
-    /// Total SOL deposited by all users (in lamports - smallest SOL unit)
+ 
+    /// EURC-like SPL mint that this vault is the authority of.
+    /// borrow.rs mints from this; repay.rs burns into this.
+    pub eurc_mint: Pubkey,
+ 
+    /// Total SOL deposited (lamports)
     pub total_collateral: u64,
-
-    /// Total vault shares issued (for yield distribution)
+    /// Total vault shares issued
     pub total_shares: u64,
-
-    /// Total amount borrowed by all users (in lamports equivalent)
+    /// Total EURC borrowed (micro-units)
     pub total_borrowed: u64,
-
-    // total borrowed shares (for proportional repayments)
+    /// Total borrowed shares
     pub total_borrowed_shares: u64,
-
-    /// Pyth price feed for SOL/USD (used for collateral valuation)
+ 
+    /// Pyth SOL/USD price feed account
     pub sol_price_feed: Pubkey,
-
-    /// Pyth price feed for EUR/USD (used for EURC valuation)
+    /// Pyth EUR/USD price feed account
     pub eur_price_feed: Pubkey,
-
-    /// Maximum age of price (in seconds) before we reject it (anti-stale attack)
+ 
+    /// Max price age in seconds (anti-stale)
     pub max_price_age: i64,
-
-    /// Loan-to-Value (LTV) threshold — e.g. 80% = user can borrow up to 80% of collateral value
-    pub ltv_threshold: u8,           // 80 = 80%
-
-    /// Liquidation threshold — if Health Factor < this, anyone can liquidate
-    pub liquidation_threshold: u8,   // 120 = 1.2x
-
-    
-
-    /// PDA bump seed
+ 
+    /// LTV percentage — used by borrow (e.g. 80 = 80%)
+    pub ltv_threshold: u8,
+    /// Liquidation health-factor percentage (e.g. 120 = 1.2x)
+    pub liquidation_threshold: u8,
+ 
+    /// PDA bump
     pub bump: u8,
 }
 
