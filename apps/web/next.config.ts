@@ -1,58 +1,38 @@
-import path from "path";
+// apps/web/next.config.js
+//
+// CRITICAL for Web NFC:
+//   The browser blocks NDEFReader.scan() / NDEFReader.write() unless the
+//   page is served with a Permissions-Policy header that allows nfc.
+//   Without this header, every NFC call rejects with NotAllowedError.
 
-const nextConfig: any = {
-  // ─── Turbopack Fix ────────────────────────────────────────────────────────
-  turbopack: {
-    // Note: Setting root to monorepo root (../../) was causing 100% CPU usage
-    // as it triggered Tailwind v4 to scan the entire monorepo.
-    // Removed to keep compilation focused on the web app only.
-    // root: path.resolve(__dirname, "../../"),
-  },
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
 
-
-  // ─── Security headers ───────────────────────────────────────────────────────
   async headers() {
     return [
       {
-        source: "/(.*)",
+        // Apply to every route on the site
+        source: "/:path*",
         headers: [
           {
             key: "Permissions-Policy",
-            value: "nfc=*",
+            // Allow NFC + USB + Bluetooth on same-origin (=self).
+            // The wildcard syntax `nfc=*` is supported but `nfc=(self)` is
+            // the safer choice — it grants the API to the top-level page
+            // and refuses cross-origin iframes from using it.
+            value:
+              "nfc=(self), usb=(self), bluetooth=(self), camera=(self), microphone=()",
           },
+          // Useful while you're behind localtunnel/ngrok during the demo
           {
             key: "X-Content-Type-Options",
             value: "nosniff",
-          },
-          {
-            key: "X-Frame-Options",
-            value: "DENY",
-          },
-          {
-            key: "Referrer-Policy",
-            value: "strict-origin-when-cross-origin",
           },
         ],
       },
     ];
   },
-
-  // ─── Development helper ─────────────────────────────────────────────────────
-  // Allows HMR and dev resources to work over the local network IP or tunnel
-  allowedDevOrigins: [
-    '192.168.0.189', 
-    'crypto-bridger-web.loca.lt',
-  ], 
-
-  // ─── Env vars exposed to the browser ────────────────────────────────────────
-  env: {
-    // IMPORTANT: Replace these with YOUR actual tunnel URLs from the terminal
-    NEXT_PUBLIC_BACKEND_URL: process.env.NEXT_PUBLIC_BACKEND_URL ?? "https://crypto-bridger-api.loca.lt",
-  },
-
-  // ─── External packages ──────────────────────────────────────────────────────
-  // Prevents Turbopack from trying to bundle native modules like lightningcss
-  serverExternalPackages: ['lightningcss'],
 };
 
-export default nextConfig;
+module.exports = nextConfig;

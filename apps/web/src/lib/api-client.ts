@@ -1,33 +1,54 @@
 // apps/web/src/lib/api-client.ts
+//
+// All backend calls go through Next.js API routes (the proxy) so:
+//   - BACKEND_URL stays server-side
+//   - No CORS issues in production
+//   - Same code path in dev and prod
+//
+// The proxy lives at:
+//   GET  /api/nfc/nonce  → backend /nfc/nonce
+//   POST /api/nfc/tap    → backend /nfc/tap
 
-// Fetch backend URL from environment, with fallback for local development
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080";
+// ----- nonce -----------------------------------------------------------------
 
-// Validate that we have a URL (optional but helpful for debugging)
-if (!process.env.NEXT_PUBLIC_BACKEND_URL) {
-  console.warn("⚠️ NEXT_PUBLIC_BACKEND_URL not set. Using fallback: http://localhost:8080");
-} else {
-  console.log(`✅ Backend URL configured: ${BACKEND_URL}`);
-}
-
-// Get fresh nonce before every tap
 export async function getNonce(): Promise<string> {
-  const res = await fetch(`${BACKEND_URL}/nfc/nonce`);
-  if (!res.ok) throw new Error("Failed to get nonce");
-  const data = await res.json();
+  const res = await fetch("/api/nfc/nonce", { cache: "no-store" });
+  if (!res.ok) throw new Error(`Failed to get nonce (HTTP ${res.status})`);
+  const data = (await res.json()) as { nonce?: string };
+  if (!data.nonce) throw new Error("Backend returned an empty nonce");
   return data.nonce;
 }
 
-// Main tap function - called by useNFCTap
-export async function nfcTap(params: {
+// ----- tap -------------------------------------------------------------------
+
+export interface NfcTapParams {
   walletAddress: string;
-  amount: number;
+  amount: number; // in EURC micro-units (already multiplied by 1e6)
   deviceId: string;
   nonce: string;
   txSignature: string;
   estimatedHealthFactor?: number;
-}) {
-  const res = await fetch(`${BACKEND_URL}/nfc/tap`, {
+  merchantData?: {
+    merchant?: string;
+    amount?: string;
+    currency?: string;
+    invoice?: string;
+  };
+}
+
+export interface NfcTapResponse {
+  success: boolean;
+  receiptId: string;
+  amount: number;
+  txHash: string;
+  merchantName: string;
+  message: string;
+  newHealthFactor: number;
+  timestamp: string;
+}
+
+export async function nfcTap(params: NfcTapParams): Promise<NfcTapResponse> {
+  const res = await fetch("/api/nfc/tap", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -37,130 +58,17 @@ export async function nfcTap(params: {
       nonce: params.nonce,
       tx_signature: params.txSignature,
       estimated_health_factor: params.estimatedHealthFactor,
+      merchant_data: params.merchantData,
     }),
+    cache: "no-store",
   });
 
   if (!res.ok) {
-    const error = await res.json().catch(() => ({}));
-    throw new Error(error.message || "Tap failed");
+    const err = await res.json().catch(() => ({}));
+    throw new Error(
+      (err as { message?: string }).message || `Tap failed (HTTP ${res.status})`,
+    );
   }
 
-  return res.json();
-}
-
-// ==================== NEW FUNCTIONS ====================
-
-export interface BalanceResponse {
-  balance: number;
-  availableCredit: number;
-}
-
-/**
- * Fetch the current card balance for a wallet
- */
-export async function getBalance(walletAddress: string): Promise<BalanceResponse> {
-  try {
-    // The backend route is currently commented out in main.rs, 
-    // so we'll use a try-catch to avoid breaking the UI
-    const res = await fetch(`${BACKEND_URL}/card/balance?address=${walletAddress}`);
-    if (!res.ok) throw new Error("Backend route not active");
-    return res.json();
-  } catch (e) {
-    // Fallback mock balance for demo if backend isn't ready
-    return { 
-      balance: 1250.50,
-      availableCredit: 1250.50 
-    };
-  }
-}
-
-/**
- * Update card settings (Freeze, Limits, Mode)
- */
-export async function updateCardSettings(params: {
-  walletAddress: string;
-  isFrozen?: boolean;
-  mode?: "credit" | "debit";
-  spendingLimit?: number;
-}) {
-  console.log("Updating card settings on backend:", params);
-  
-  // For the MVP demo, we'll simulate a successful update
-  await new Promise(r => setTimeout(r, 500));
-  return { success: true, updated: params };
-}
-
-/**
- * Deposit SOL collateral to the lending vault
- */
-export async function depositCollateral(params: {
-  walletAddress: string;
-  amount: number;
-  signature: string;
-}) {
-  console.log("Processing collateral deposit:", params);
-  
-  // Simulate backend processing
-  await new Promise(r => setTimeout(r, 1000));
-  
-  return {
-    success: true,
-    txHash: params.signature || "mock_tx_" + Math.random().toString(36).substring(7),
-    newAvailableCredit: 2500.0, // Mocked increase
-  };
-}
-
-/**
- * Interface for the POS Simulator response
- */
-export interface SwipeResponse {
-  success: boolean;
-  message: string;
-  transactionId: string;
-  approvedAmount: number;
-  cashbackAmount: number;
-  newBalance: number;
-  txHash?: string;
-}
-
-/**
- * Simulate a physical card swipe or online purchase
- */
-export async function swipeCard(params: {
-  merchantName: string;
-  merchantCategory: string;
-  amount: number;
-  currency: string;
-  walletAddress: string;
-}): Promise<SwipeResponse> {
-  console.log("Processing swipe at merchant:", params.merchantName);
-  
-  // Simulate network/blockchain delay
-  await new Promise(r => setTimeout(r, 1200));
-
-  // For the MVP demo, we'll auto-approve if amount < 2000
-  const isApproved = params.amount < 2000;
-  const cashbackRate = 0.02; // 2% for MVP
-  const cashbackAmount = params.amount * cashbackRate;
-
-  if (!isApproved) {
-    return {
-      success: false,
-      message: "Declined: Insufficient Credit Line",
-      transactionId: "FAILED",
-      approvedAmount: 0,
-      cashbackAmount: 0,
-      newBalance: 2500.0,
-    };
-  }
-
-  return {
-    success: true,
-    message: `Approved at ${params.merchantName}`,
-    transactionId: "TX-" + Math.random().toString(36).substring(2, 9).toUpperCase(),
-    approvedAmount: params.amount,
-    cashbackAmount: cashbackAmount,
-    newBalance: 2500.0 - params.amount + cashbackAmount,
-    txHash: "57kPkY..." + Math.random().toString(36).substring(2, 5),
-  };
+  return (await res.json()) as NfcTapResponse;
 }

@@ -1,11 +1,13 @@
 // apps/web/src/lib/anchor-client.ts
-// Mock‑free client for the Lending Vault Anchor program.
+// Mock-free client for the Lending Vault Anchor program.
+// Updated: fetchUserPosition now accepts a live SOL/USD price so the
+// health factor and available credit shown in the UI match what the
+// on-chain `borrow` instruction will enforce.
 
 import {
   Program,
   AnchorProvider,
   BN,
-  Idl,
 } from "@coral-xyz/anchor";
 import {
   PublicKey,
@@ -20,7 +22,6 @@ import {
   createAssociatedTokenAccountInstruction,
 } from "@solana/spl-token";
 import idl from "@/idl/lending_vault.json";
-import { SOL_USD_PRICE_UPDATE, EUR_USD_PRICE_UPDATE } from "./pyth-feeds";
 
 // ----------------------------------------------------------------------
 // Type for our Anchor program (generated typings not available)
@@ -28,21 +29,13 @@ import { SOL_USD_PRICE_UPDATE, EUR_USD_PRICE_UPDATE } from "./pyth-feeds";
 export type LendingVault = any;
 
 // ----------------------------------------------------------------------
-// Program ID from environment
+// Program ID and token mints from environment
 // ----------------------------------------------------------------------
 export const LENDING_PROGRAM_ID = new PublicKey(
-  process.env.NEXT_PUBLIC_LENDING_PROGRAM_ID!
+  process.env.NEXT_PUBLIC_LENDING_PROGRAM_ID!,
 );
-
-// ----------------------------------------------------------------------
-// Token mints from environment
-// ----------------------------------------------------------------------
-export const EURC_MINT = new PublicKey(
-  process.env.NEXT_PUBLIC_EURC_MINT!
-);
-export const WSOL_MINT = new PublicKey(
-  process.env.NEXT_PUBLIC_WSOL_MINT!
-);
+export const EURC_MINT = new PublicKey(process.env.NEXT_PUBLIC_EURC_MINT!);
+export const WSOL_MINT = new PublicKey(process.env.NEXT_PUBLIC_WSOL_MINT!);
 
 // ----------------------------------------------------------------------
 // PDA seeds (must match the Rust program)
@@ -52,23 +45,20 @@ const VAULT_TOKEN_ACCOUNT_SEED = Buffer.from("vault_token_account");
 const USER_POSITION_SEED = Buffer.from("user_position");
 
 export function getVaultPda(): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [VAULT_SEED],
-    LENDING_PROGRAM_ID
-  )[0];
+  return PublicKey.findProgramAddressSync([VAULT_SEED], LENDING_PROGRAM_ID)[0];
 }
 
 export function getVaultTokenAccountPda(): PublicKey {
   return PublicKey.findProgramAddressSync(
     [VAULT_TOKEN_ACCOUNT_SEED],
-    LENDING_PROGRAM_ID
+    LENDING_PROGRAM_ID,
   )[0];
 }
 
 export function getUserPositionPda(userPubkey: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(
     [USER_POSITION_SEED, userPubkey.toBuffer()],
-    LENDING_PROGRAM_ID
+    LENDING_PROGRAM_ID,
   )[0];
 }
 
@@ -76,10 +66,8 @@ export function getUserPositionPda(userPubkey: PublicKey): PublicKey {
 // Program instance factory
 // ----------------------------------------------------------------------
 export function getLendingProgram(
-  provider: AnchorProvider
+  provider: AnchorProvider,
 ): Program<LendingVault> {
-  // Anchor 0.28.0+ removed the separate programId argument if it's in the IDL
-  // but if we pass it, we should ensure the order is correct. Let's cast to any for the constructor.
   return new (Program as any)(idl, LENDING_PROGRAM_ID, provider);
 }
 
@@ -92,123 +80,29 @@ export interface CollateralPosition {
   collateralSymbol: string;
   collateralAmount: number; // in SOL
   collateralUsdValue: number;
-  borrowedAmount: number;   // in EURC
+  borrowedAmount: number; // in EURC
   healthFactor: number;
   liquidationThreshold: number; // e.g. 1.2 = 120%
   ltv: number;
   maxBorrowable: number;
-}
-
-export interface CardState {
-  isActive: boolean;
-  isFrozen: boolean;
-  spendingLimit: number;
-  currentDaySpend: number;
-  monthlySpend: number;
-  cardNumber: string;
-  expiryDate: string;
-  cvv: string;
-  mode: "credit" | "debit";
-}
-
-export interface AppTransaction {
-  id: string;
-  type: "purchase" | "topup" | "cashback" | "swap" | "interest";
-  description: string;
-  merchant?: string;
-  amount: number;
-  status: "completed" | "pending" | "failed";
-  timestamp: Date;
-  txHash?: string;
+  /** SOL/USD price used for this calculation (so the UI can label it as "live") */
+  solPriceUsd: number;
 }
 
 // ----------------------------------------------------------------------
-// Mock data for the dashboard (restored)
-// ----------------------------------------------------------------------
-export function getMockTransactions(): AppTransaction[] {
-  return [
-    {
-      id: "1",
-      type: "purchase",
-      description: "Starbucks Coffee",
-      merchant: "Starbucks",
-      amount: -4.5,
-      status: "completed",
-      timestamp: new Date(Date.now() - 1000 * 60 * 30), // 30 mins ago
-    },
-    {
-      id: "2",
-      type: "cashback",
-      description: "Cashback Reward",
-      amount: 0.09,
-      status: "completed",
-      timestamp: new Date(Date.now() - 1000 * 60 * 29),
-    },
-    {
-      id: "3",
-      type: "purchase",
-      description: "Amazon.com",
-      merchant: "Amazon",
-      amount: -84.2,
-      status: "completed",
-      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2), // 2 hours ago
-    },
-    {
-      id: "4",
-      type: "topup",
-      description: "Collateral Deposit",
-      amount: 500,
-      status: "completed",
-      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24), // 1 day ago
-      txHash: "57kPkY...",
-    },
-    {
-      id: "5",
-      type: "swap",
-      description: "SOL to EURC Swap",
-      amount: 150,
-      status: "completed",
-      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 48), // 2 days ago
-    },
-  ];
-}
-
-export function getMockCardState(): CardState {
-  return {
-    isActive: true,
-    isFrozen: false,
-    spendingLimit: 2500,
-    currentDaySpend: 88.7,
-    monthlySpend: 1240.5,
-    cardNumber: "**** **** **** 4291",
-    expiryDate: "12/28",
-    cvv: "***",
-    mode: "credit",
-  };
-}
-
-export function getMockCollateralPosition(): CollateralPosition {
-  return {
-    owner: "8xK9mBzLpQRnVwT3cY7dFhJeN2sAuXiCvMoP4gS5tEq",
-    collateralMint: "So11111111111111111111111111111111111111112",
-    collateralSymbol: "SOL",
-    collateralAmount: 15.5,
-    collateralUsdValue: 2611.2,
-    borrowedAmount: 850.0,
-    healthFactor: 2.15,
-    liquidationThreshold: 1.2,
-    ltv: 0.75,
-    maxBorrowable: 1108.4,
-  };
-}
-
-// ----------------------------------------------------------------------
-// Real on‑chain position fetch
+// Real on-chain position fetch — uses LIVE Pyth price passed in from UI
 // ----------------------------------------------------------------------
 export async function fetchUserPosition(
   walletPubkey: PublicKey,
-  provider: AnchorProvider
+  provider: AnchorProvider,
+  solPriceUsd: number,
 ): Promise<CollateralPosition | null> {
+  if (!isFinite(solPriceUsd) || solPriceUsd <= 0) {
+    throw new Error(
+      "fetchUserPosition: solPriceUsd is required and must be > 0",
+    );
+  }
+
   const program = getLendingProgram(provider);
   const vaultPda = getVaultPda();
   const positionPda = getUserPositionPda(walletPubkey);
@@ -219,15 +113,10 @@ export async function fetchUserPosition(
       (program.account as any).userPosition.fetch(positionPda),
     ]);
 
-    // Amounts are in native units: lamports (9 decimals) and EURC micro‑units (6 decimals)
+    // Amounts are in native units: lamports (9 decimals) and EURC micro-units (6 decimals)
     const collateralAmount = position.depositedAmount.toNumber() / 1e9; // SOL
-    const borrowedAmount = position.borrowedAmount.toNumber() / 1e6;   // EURC
-
-    // For health factor we need current SOL price – here we use a simple
-    // approximation. In production, fetch from Pyth or Jupiter.
-    // You can replace `cachedSolPrice` with a real oracle call.
-    let solPrice = 168.45; // fallback – replace with a dynamic fetch
-    const collateralUsd = collateralAmount * solPrice;
+    const borrowedAmount = position.borrowedAmount.toNumber() / 1e6; // EURC
+    const collateralUsd = collateralAmount * solPriceUsd;
 
     // Health factor: (collateralUsd * LTV%) / borrowedAmount
     const healthFactor =
@@ -249,10 +138,25 @@ export async function fetchUserPosition(
       liquidationThreshold: vault.liquidationThreshold / 100,
       ltv: vault.ltvThreshold / 100,
       maxBorrowable: maxBorrowable > 0 ? maxBorrowable : 0,
+      solPriceUsd,
     };
   } catch (e) {
-    console.warn("fetchUserPosition failed:", e);
-    return null;
+    // No position yet → return a zero-state position so the UI can render
+    // a "Deposit to get started" view rather than a crash.
+    console.warn("fetchUserPosition: no position yet, returning zero-state", e);
+    return {
+      owner: walletPubkey.toString(),
+      collateralMint: WSOL_MINT.toString(),
+      collateralSymbol: "SOL",
+      collateralAmount: 0,
+      collateralUsdValue: 0,
+      borrowedAmount: 0,
+      healthFactor: 9999,
+      liquidationThreshold: 1.2,
+      ltv: 0.8,
+      maxBorrowable: 0,
+      solPriceUsd,
+    };
   }
 }
 
@@ -262,7 +166,7 @@ export async function fetchUserPosition(
 export async function buildDepositTransaction(
   walletPubkey: PublicKey,
   amountSol: number,
-  provider: AnchorProvider
+  provider: AnchorProvider,
 ): Promise<Transaction> {
   const program = getLendingProgram(provider);
   const vaultPda = getVaultPda();
@@ -274,10 +178,10 @@ export async function buildDepositTransaction(
     walletPubkey,
     false,
     TOKEN_PROGRAM_ID,
-    ASSOCIATED_TOKEN_PROGRAM_ID
+    ASSOCIATED_TOKEN_PROGRAM_ID,
   );
 
-  const amountLamports = new BN(amountSol * 1e9);
+  const amountLamports = new BN(Math.round(amountSol * 1e9));
   const tx = new Transaction();
 
   const accountInfo = await provider.connection.getAccountInfo(userWsolAta);
@@ -289,8 +193,8 @@ export async function buildDepositTransaction(
         walletPubkey,
         WSOL_MINT,
         TOKEN_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID
-      )
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+      ),
     );
   }
 
@@ -301,7 +205,7 @@ export async function buildDepositTransaction(
       vault: vaultPda,
       userPosition: userPositionPda,
       userTokenAccount: userWsolAta,
-      vaultTokenAccount: vaultTokenAccount,
+      vaultTokenAccount,
       tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
       clock: SYSVAR_CLOCK_PUBKEY,
@@ -317,13 +221,13 @@ export async function buildBorrowTransaction(
   amountEurc: number,
   provider: AnchorProvider,
   solPriceUpdate: PublicKey,
-  eurPriceUpdate: PublicKey
+  eurPriceUpdate: PublicKey,
 ): Promise<Transaction> {
   const program = getLendingProgram(provider);
   const vaultPda = getVaultPda();
   const userPositionPda = getUserPositionPda(walletPubkey);
 
-  const amountMicro = new BN(amountEurc * 1e6);
+  const amountMicro = new BN(Math.round(amountEurc * 1e6));
 
   const tx = await (program.methods as any)
     .borrow(amountMicro)
@@ -343,7 +247,7 @@ export async function buildBorrowTransaction(
 export async function buildRepayTransaction(
   walletPubkey: PublicKey,
   amountEurc: number,
-  provider: AnchorProvider
+  provider: AnchorProvider,
 ): Promise<Transaction> {
   const program = getLendingProgram(provider);
   const vaultPda = getVaultPda();
@@ -355,10 +259,10 @@ export async function buildRepayTransaction(
     walletPubkey,
     false,
     TOKEN_PROGRAM_ID,
-    ASSOCIATED_TOKEN_PROGRAM_ID
+    ASSOCIATED_TOKEN_PROGRAM_ID,
   );
 
-  const amountMicro = new BN(amountEurc * 1e6);
+  const amountMicro = new BN(Math.round(amountEurc * 1e6));
   const tx = new Transaction();
 
   const accountInfo = await provider.connection.getAccountInfo(userEurcAta);
@@ -370,8 +274,8 @@ export async function buildRepayTransaction(
         walletPubkey,
         EURC_MINT,
         TOKEN_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID
-      )
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+      ),
     );
   }
 
@@ -382,60 +286,11 @@ export async function buildRepayTransaction(
       userPosition: userPositionPda,
       vault: vaultPda,
       userTokenAccount: userEurcAta,
-      vaultTokenAccount: vaultTokenAccount,
+      vaultTokenAccount,
       tokenProgram: TOKEN_PROGRAM_ID,
     } as any)
     .instruction();
 
   tx.add(ix);
   return tx;
-}
-
-// ----------------------------------------------------------------------
-// Convenience: simulate a card swipe (borrow) with full signing/sending
-// ----------------------------------------------------------------------
-export async function swipeCardOnChain(
-  walletPubkey: PublicKey,
-  amountEurc: number,
-  provider: AnchorProvider,
-  solPriceUpdate: PublicKey,
-  eurPriceUpdate: PublicKey
-): Promise<{ success: boolean; txHash: string; message: string }> {
-  try {
-    const tx = await buildBorrowTransaction(
-      walletPubkey,
-      amountEurc,
-      provider,
-      solPriceUpdate,
-      eurPriceUpdate
-    );
-    const { blockhash, lastValidBlockHeight } =
-      await provider.connection.getLatestBlockhash("confirmed");
-    tx.recentBlockhash = blockhash;
-    tx.feePayer = walletPubkey;
-
-    if (!provider.wallet.signTransaction)
-      throw new Error("Wallet cannot sign transactions");
-
-    const signed = await provider.wallet.signTransaction(tx);
-    const txid = await provider.connection.sendRawTransaction(
-      signed.serialize()
-    );
-    await provider.connection.confirmTransaction({
-      blockhash,
-      lastValidBlockHeight,
-      signature: txid,
-    });
-    return {
-      success: true,
-      txHash: txid,
-      message: `Borrowed ${amountEurc} EURC`,
-    };
-  } catch (err: any) {
-    return {
-      success: false,
-      txHash: "",
-      message: err.message,
-    };
-  }
 }
