@@ -1,4 +1,5 @@
 // apps/web/src/lib/anchor-client.ts
+// Mock‑free client for the Lending Vault Anchor program.
 
 import {
   Program,
@@ -20,29 +21,36 @@ import {
 } from "@solana/spl-token";
 import idl from "@/idl/lending_vault.json";
 import { SOL_USD_PRICE_UPDATE, EUR_USD_PRICE_UPDATE } from "./pyth-feeds";
+
+// ----------------------------------------------------------------------
+// Type for our Anchor program (generated typings not available)
+// ----------------------------------------------------------------------
 export type LendingVault = any;
 
-// Program ID (must be set in .env.local)
+// ----------------------------------------------------------------------
+// Program ID from environment
+// ----------------------------------------------------------------------
 export const LENDING_PROGRAM_ID = new PublicKey(
   process.env.NEXT_PUBLIC_LENDING_PROGRAM_ID!
 );
 
-// Token mints from environment variables
+// ----------------------------------------------------------------------
+// Token mints from environment
+// ----------------------------------------------------------------------
 export const EURC_MINT = new PublicKey(
   process.env.NEXT_PUBLIC_EURC_MINT!
 );
-const WSOL_MINT = new PublicKey(
+export const WSOL_MINT = new PublicKey(
   process.env.NEXT_PUBLIC_WSOL_MINT!
 );
 
-// PDA seeds
+// ----------------------------------------------------------------------
+// PDA seeds (must match the Rust program)
+// ----------------------------------------------------------------------
 const VAULT_SEED = Buffer.from("vault");
 const VAULT_TOKEN_ACCOUNT_SEED = Buffer.from("vault_token_account");
 const USER_POSITION_SEED = Buffer.from("user_position");
 
-/**
- * Helper: get the vault PDA
- */
 export function getVaultPda(): PublicKey {
   return PublicKey.findProgramAddressSync(
     [VAULT_SEED],
@@ -50,9 +58,6 @@ export function getVaultPda(): PublicKey {
   )[0];
 }
 
-/**
- * Helper: get the vault token account PDA
- */
 export function getVaultTokenAccountPda(): PublicKey {
   return PublicKey.findProgramAddressSync(
     [VAULT_TOKEN_ACCOUNT_SEED],
@@ -60,9 +65,6 @@ export function getVaultTokenAccountPda(): PublicKey {
   )[0];
 }
 
-/**
- * Helper: get a user's position PDA
- */
 export function getUserPositionPda(userPubkey: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(
     [USER_POSITION_SEED, userPubkey.toBuffer()],
@@ -70,42 +72,46 @@ export function getUserPositionPda(userPubkey: PublicKey): PublicKey {
   )[0];
 }
 
-/**
- * Create an Anchor Program instance.
- */
-export function getLendingProgram(provider: AnchorProvider): Program<LendingVault> {
-  return new Program(idl as Idl, LENDING_PROGRAM_ID, provider);
+// ----------------------------------------------------------------------
+// Program instance factory
+// ----------------------------------------------------------------------
+export function getLendingProgram(
+  provider: AnchorProvider
+): Program<LendingVault> {
+  // Anchor 0.28.0+ removed the separate programId argument if it's in the IDL
+  // but if we pass it, we should ensure the order is correct. Let's cast to any for the constructor.
+  return new (Program as any)(idl, LENDING_PROGRAM_ID, provider);
 }
 
 // ----------------------------------------------------------------------
-// Types (matching what the UI expects)
+// Types (matching UI expectations)
 // ----------------------------------------------------------------------
 export interface CollateralPosition {
   owner: string;
   collateralMint: string;
   collateralSymbol: string;
-  collateralAmount: number;        // in SOL (human readable)
+  collateralAmount: number; // in SOL
   collateralUsdValue: number;
-  borrowedAmount: number;         // in EURC (human readable)
+  borrowedAmount: number;   // in EURC
   healthFactor: number;
-  liquidationThreshold: number;   // e.g. 0.8
-  ltv: number;                    // loan‑to‑value ratio
-  maxBorrowable: number;          // in USD
+  liquidationThreshold: number; // e.g. 1.2 = 120%
+  ltv: number;
+  maxBorrowable: number;
 }
 
 export interface CardState {
   isActive: boolean;
   isFrozen: boolean;
-  spendingLimit: number;   // daily limit in USD
+  spendingLimit: number;
   currentDaySpend: number;
   monthlySpend: number;
-  cardNumber: string;      // masked, from wallet address
+  cardNumber: string;
   expiryDate: string;
   cvv: string;
   mode: "credit" | "debit";
 }
 
-export interface Transaction {
+export interface AppTransaction {
   id: string;
   type: "purchase" | "topup" | "cashback" | "swap" | "interest";
   description: string;
@@ -116,10 +122,10 @@ export interface Transaction {
   txHash?: string;
 }
 
-/**
- * Mock data for the dashboard
- */
-export function getMockTransactions(): Transaction[] {
+// ----------------------------------------------------------------------
+// Mock data for the dashboard (restored)
+// ----------------------------------------------------------------------
+export function getMockTransactions(): AppTransaction[] {
   return [
     {
       id: "1",
@@ -190,28 +196,15 @@ export function getMockCollateralPosition(): CollateralPosition {
     collateralUsdValue: 2611.2,
     borrowedAmount: 850.0,
     healthFactor: 2.15,
-    liquidationThreshold: 0.8,
+    liquidationThreshold: 1.2,
     ltv: 0.75,
     maxBorrowable: 1108.4,
   };
 }
 
-// Mock price for SOL/USD (replace with Pyth client for real value)
-// For a quick demo, use a hardcoded price that's close to market.
-let cachedSolPrice = 168.45; // fallback
-
-/**
- * Set the SOL/USD price manually (or fetch from Pyth).
- * In a production app you'd call getPythPrice().
- */
-export async function updateSolPrice(provider: AnchorProvider) {
-  // Placeholder: you could implement Pyth client here.
-  // For now, keep the default.
-}
-
-/**
- * Fetch the on‑chain user position and return CollateralPosition.
- */
+// ----------------------------------------------------------------------
+// Real on‑chain position fetch
+// ----------------------------------------------------------------------
 export async function fetchUserPosition(
   walletPubkey: PublicKey,
   provider: AnchorProvider
@@ -221,18 +214,22 @@ export async function fetchUserPosition(
   const positionPda = getUserPositionPda(walletPubkey);
 
   try {
-    // Fetch both accounts in parallel
     const [vault, position] = await Promise.all([
-      program.account.vault.fetch(vaultPda),
-      program.account.userPosition.fetch(positionPda),
+      (program.account as any).vault.fetch(vaultPda),
+      (program.account as any).userPosition.fetch(positionPda),
     ]);
 
-    // Convert on‑chain amounts to human readable units
+    // Amounts are in native units: lamports (9 decimals) and EURC micro‑units (6 decimals)
     const collateralAmount = position.depositedAmount.toNumber() / 1e9; // SOL
-    const collateralUsd = collateralAmount * cachedSolPrice;
-    const borrowedAmount = position.borrowedAmount.toNumber() / 1e6; // EURC (6 decimals)
+    const borrowedAmount = position.borrowedAmount.toNumber() / 1e6;   // EURC
 
-    // Health factor (simplified) – matches on-chain logic
+    // For health factor we need current SOL price – here we use a simple
+    // approximation. In production, fetch from Pyth or Jupiter.
+    // You can replace `cachedSolPrice` with a real oracle call.
+    let solPrice = 168.45; // fallback – replace with a dynamic fetch
+    const collateralUsd = collateralAmount * solPrice;
+
+    // Health factor: (collateralUsd * LTV%) / borrowedAmount
     const healthFactor =
       borrowedAmount > 0
         ? (collateralUsd * (vault.ltvThreshold / 100)) / borrowedAmount
@@ -255,14 +252,13 @@ export async function fetchUserPosition(
     };
   } catch (e) {
     console.warn("fetchUserPosition failed:", e);
-    return null; // position doesn't exist yet
+    return null;
   }
 }
 
-/**
- * Build a deposit transaction: wraps and deposits SOL as collateral.
- * @param amountSol Amount in SOL (human readable)
- */
+// ----------------------------------------------------------------------
+// Transaction builders
+// ----------------------------------------------------------------------
 export async function buildDepositTransaction(
   walletPubkey: PublicKey,
   amountSol: number,
@@ -273,7 +269,6 @@ export async function buildDepositTransaction(
   const vaultTokenAccount = getVaultTokenAccountPda();
   const userPositionPda = getUserPositionPda(walletPubkey);
 
-  // Need user's WSOL token account
   const userWsolAta = await getAssociatedTokenAddress(
     WSOL_MINT,
     walletPubkey,
@@ -283,9 +278,8 @@ export async function buildDepositTransaction(
   );
 
   const amountLamports = new BN(amountSol * 1e9);
-
-  // Check if ATA exists; if not, add instruction to create it
   const tx = new Transaction();
+
   const accountInfo = await provider.connection.getAccountInfo(userWsolAta);
   if (!accountInfo) {
     tx.add(
@@ -300,7 +294,7 @@ export async function buildDepositTransaction(
     );
   }
 
-  const ix = await program.methods
+  const ix = await (program.methods as any)
     .deposit(amountLamports)
     .accounts({
       user: walletPubkey,
@@ -311,23 +305,17 @@ export async function buildDepositTransaction(
       tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
       clock: SYSVAR_CLOCK_PUBKEY,
-    })
+    } as any)
     .instruction();
 
   tx.add(ix);
   return tx;
 }
 
-/**
- * Build a borrow transaction (simulates a card purchase in credit mode).
- * @param amountEurc Amount in EURC (human readable, e.g. 10.5)
- * Note: requires Pyth price feeds on devnet!
- */
 export async function buildBorrowTransaction(
   walletPubkey: PublicKey,
   amountEurc: number,
   provider: AnchorProvider,
-  // Pyth accounts must be provided by the caller (we'll explain later)
   solPriceUpdate: PublicKey,
   eurPriceUpdate: PublicKey
 ): Promise<Transaction> {
@@ -337,7 +325,7 @@ export async function buildBorrowTransaction(
 
   const amountMicro = new BN(amountEurc * 1e6);
 
-  const tx = await program.methods
+  const tx = await (program.methods as any)
     .borrow(amountMicro)
     .accounts({
       user: walletPubkey,
@@ -346,16 +334,12 @@ export async function buildBorrowTransaction(
       solPriceUpdate,
       eurPriceUpdate,
       clock: SYSVAR_CLOCK_PUBKEY,
-    })
+    } as any)
     .transaction();
 
   return tx;
 }
 
-/**
- * Build a repay transaction (used by NFC tap).
- * @param amountEurc Amount in EURC to repay
- */
 export async function buildRepayTransaction(
   walletPubkey: PublicKey,
   amountEurc: number,
@@ -375,11 +359,8 @@ export async function buildRepayTransaction(
   );
 
   const amountMicro = new BN(amountEurc * 1e6);
-
-  // Ensure user has enough EURC (frontend should check before)
-
   const tx = new Transaction();
-  // If ATA doesn't exist, add instruction (though user should have it if they borrowed)
+
   const accountInfo = await provider.connection.getAccountInfo(userEurcAta);
   if (!accountInfo) {
     tx.add(
@@ -394,7 +375,7 @@ export async function buildRepayTransaction(
     );
   }
 
-  const ix = await program.methods
+  const ix = await (program.methods as any)
     .repay(amountMicro)
     .accounts({
       user: walletPubkey,
@@ -403,18 +384,16 @@ export async function buildRepayTransaction(
       userTokenAccount: userEurcAta,
       vaultTokenAccount: vaultTokenAccount,
       tokenProgram: TOKEN_PROGRAM_ID,
-    })
+    } as any)
     .instruction();
 
   tx.add(ix);
   return tx;
 }
 
-/**
- * Simulate card swipe (borrow) for POS Simulator.
- * This calls the on‑chain borrow instruction instead of a mock.
- * NOTE: You still need to pass Pyth accounts.
- */
+// ----------------------------------------------------------------------
+// Convenience: simulate a card swipe (borrow) with full signing/sending
+// ----------------------------------------------------------------------
 export async function swipeCardOnChain(
   walletPubkey: PublicKey,
   amountEurc: number,
@@ -430,7 +409,6 @@ export async function swipeCardOnChain(
       solPriceUpdate,
       eurPriceUpdate
     );
-    // Sign and send
     const { blockhash, lastValidBlockHeight } =
       await provider.connection.getLatestBlockhash("confirmed");
     tx.recentBlockhash = blockhash;

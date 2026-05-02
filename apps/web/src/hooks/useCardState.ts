@@ -31,6 +31,7 @@ export function useCardState(): DynamicCardState {
     isFrozen: false,
     isLoading: false,
     error: null,
+    refresh: () => {},
   });
 
   const refresh = useCallback(async () => {
@@ -49,7 +50,8 @@ export function useCardState(): DynamicCardState {
     try {
       const pos = await fetchUserPosition(publicKey, provider);
       if (pos) {
-        setState({
+        setState(s => ({
+          ...s,
           cardNumber: shortenAddress(publicKey.toBase58()),
           mode: pos.borrowedAmount > 0 ? "credit" : "debit",
           availableCredit: pos.maxBorrowable,
@@ -58,7 +60,7 @@ export function useCardState(): DynamicCardState {
           isFrozen: false, // we could add a real flag later
           isLoading: false,
           error: null,
-        });
+        }));
       } else {
         // no position yet, show zeroed state
         setState(s => ({

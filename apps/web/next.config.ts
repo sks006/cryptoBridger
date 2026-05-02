@@ -1,4 +1,15 @@
+import path from "path";
+
 const nextConfig: any = {
+  // ─── Turbopack Fix ────────────────────────────────────────────────────────
+  turbopack: {
+    // Note: Setting root to monorepo root (../../) was causing 100% CPU usage
+    // as it triggered Tailwind v4 to scan the entire monorepo.
+    // Removed to keep compilation focused on the web app only.
+    // root: path.resolve(__dirname, "../../"),
+  },
+
+
   // ─── Security headers ───────────────────────────────────────────────────────
   async headers() {
     return [
@@ -28,7 +39,10 @@ const nextConfig: any = {
 
   // ─── Development helper ─────────────────────────────────────────────────────
   // Allows HMR and dev resources to work over the local network IP or tunnel
-  allowedDevOrigins: ['192.168.0.189', 'crypto-bridger-web.loca.lt', 'nice-dingo-52.loca.lt', 'ordinary-ape-65.loca.lt'], 
+  allowedDevOrigins: [
+    '192.168.0.189', 
+    'crypto-bridger-web.loca.lt',
+  ], 
 
   // ─── Env vars exposed to the browser ────────────────────────────────────────
   env: {

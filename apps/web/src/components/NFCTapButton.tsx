@@ -51,9 +51,22 @@ export const NFCTapButton: React.FC<NFCTapButtonProps> = ({
 
   const handleTap = () => {
     if (canTap) {
-      onTap(amount);        // Direct call - critical for future real Web NFC
+      onTap(amount); // Now starts real NFC scan
     }
   };
+
+  // In the scanning state section:
+  {
+    state === "scanning" && (
+      <div className="w-full py-6 flex flex-col items-center gap-3 text-emerald-400">
+        <Loader2 className="w-8 h-8 animate-spin" />
+        <p className="font-medium">Scanning for NFC tag...</p>
+        <p className="text-xs text-muted-foreground">
+          Hold near merchant terminal
+        </p>
+      </div>
+    );
+  }
 
   return (
     <Card className="w-full max-w-sm mx-auto overflow-hidden border-2 border-border transition-all duration-300 hover:shadow-2xl dark:bg-zinc-900/50">
@@ -62,19 +75,15 @@ export const NFCTapButton: React.FC<NFCTapButtonProps> = ({
           {STATE_LABELS[state] ?? "Tap to Pay"}
         </CardTitle>
         <p className="text-sm text-muted-foreground">
-          {state === "idle" 
-            ? "Powered by Solana • Instant JIT Borrow" 
+          {state === "idle"
+            ? "Powered by Solana • Instant JIT Borrow"
             : "Real-time on-chain transaction"}
         </p>
       </CardHeader>
 
       <CardContent className="flex flex-col items-center py-10">
         {/* Main Animation */}
-        <NFCRingAnimation 
-          active={isActive} 
-          status={state} 
-          className="mb-8" 
-        />
+        <NFCRingAnimation active={isActive} status={state} className="mb-8" />
 
         {/* Amount Display */}
         <div className="text-center space-y-3 mb-6">
@@ -91,7 +100,7 @@ export const NFCTapButton: React.FC<NFCTapButtonProps> = ({
               <div className="text-xs text-muted-foreground space-y-1">
                 <div>Receipt ID: {receipt.receiptId}</div>
                 {receipt.txHash && (
-                  <a 
+                  <a
                     href={`https://solscan.io/tx/${receipt.txHash}`}
                     target="_blank"
                     rel="noopener noreferrer"
@@ -131,7 +140,9 @@ export const NFCTapButton: React.FC<NFCTapButtonProps> = ({
         {state === "processing" && (
           <div className="w-full py-4 flex items-center justify-center gap-3 text-amber-500">
             <Loader2 className="w-5 h-5 animate-spin" />
-            <span className="font-medium">Borrowing EURC &amp; Processing...</span>
+            <span className="font-medium">
+              Borrowing EURC &amp; Processing...
+            </span>
           </div>
         )}
 

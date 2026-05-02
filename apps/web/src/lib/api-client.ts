@@ -24,6 +24,8 @@ export async function nfcTap(params: {
   amount: number;
   deviceId: string;
   nonce: string;
+  txSignature: string;
+  estimatedHealthFactor?: number;
 }) {
   const res = await fetch(`${BACKEND_URL}/nfc/tap`, {
     method: "POST",
@@ -33,6 +35,8 @@ export async function nfcTap(params: {
       amount: params.amount,
       device_id: params.deviceId,
       nonce: params.nonce,
+      tx_signature: params.txSignature,
+      estimated_health_factor: params.estimatedHealthFactor,
     }),
   });
 
