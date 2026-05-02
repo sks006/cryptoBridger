@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["programs/lending_vault"]
+members = ["programs/lending_vault", "programs/nfc_authorization"]
 exclude = ["backend"]
 
 [profile.release]
