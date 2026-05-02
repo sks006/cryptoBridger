@@ -11,7 +11,6 @@ import { Badge } from "@/components/ui/badge";
 import { shortenAddress } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import { useState, useEffect } from "react"; // ← useEffect added
-import { LAMPORTS_PER_SOL } from "@/lib/solana";
 import { useConnection } from "@solana/wallet-adapter-react";
 
 interface WalletConnectProps {
@@ -36,7 +35,7 @@ export default function WalletConnect({ className }: WalletConnectProps) {
     if (connected && publicKey) {
       connection
         .getBalance(publicKey)
-        .then((b) => setBalance(b / LAMPORTS_PER_SOL))
+        .then((b) => setBalance(b / 1_000_000_000))
         .catch((err) => {
           console.warn(
             "Could not fetch balance (wallet might be transitioning):",
@@ -65,7 +64,14 @@ export default function WalletConnect({ className }: WalletConnectProps) {
 
     return (
       <div className={className}>
-        <WalletMultiButton />
+        <Button 
+          variant="gradient" 
+          onClick={() => setVisible(true)}
+          className="flex items-center gap-2"
+        >
+          <Wallet className="w-4 h-4" />
+          Connect Wallet
+        </Button>
       </div>
     );
   }

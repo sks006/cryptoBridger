@@ -1,44 +1,39 @@
-// apps/web/src/app/api/nfc/tap/route.ts
+// apps/web/src/app/api/nfc/nonce/route.ts
 //
-// Thin proxy to the Rust backend POST /nfc/tap endpoint.
-// Keeps the backend URL server-side only (never exposed to the browser).
+// GET proxy → Rust backend /nfc/nonce.
+//
+// The frontend (web-nfc.ts) calls fetch("/api/nfc/nonce") expecting a JSON
+// object: { "nonce": "..." }. This route forwards that call to the backend,
+// keeping BACKEND_URL server-side so it never appears in the browser.
 
-
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8080";
 
-export async function POST(req: NextRequest) {
-  let body: unknown;
+export async function GET() {
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ message: "Invalid JSON body" }, { status: 400 });
-  }
-
-  let backendRes: Response;
-  try {
-    backendRes = await fetch(`${BACKEND_URL}/nfc/tap`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      // Forward the original request signal so aborting the client fetch
-      // also cancels the upstream request
-      signal: req.signal,
+    const res = await fetch(`${BACKEND_URL}/nfc/nonce`, {
+      // Defeat any CDN caching — every nonce must be fresh
+      cache: "no-store",
     });
-  } catch (err) {
-    console.error("[/api/nfc/tap] Backend unreachable:", err);
+
+    if (!res.ok) {
+      return NextResponse.json(
+        { error: `Backend returned ${res.status}` },
+        { status: res.status },
+      );
+    }
+
+    const data = await res.json();
+    return NextResponse.json(data, {
+      status: 200,
+      headers: { "Cache-Control": "no-store, max-age=0" },
+    });
+  } catch (e: any) {
+    console.error("Nonce proxy error:", e);
     return NextResponse.json(
-      { message: "Payment backend unavailable. Please try again." },
-      { status: 503 },
+      { error: "Backend unreachable" },
+      { status: 502 },
     );
   }
-
-  const data = await backendRes.json().catch(() => ({}));
-
-  if (!backendRes.ok) {
-    return NextResponse.json(data, { status: backendRes.status });
-  }
-
-  return NextResponse.json(data);
 }

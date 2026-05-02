@@ -14,7 +14,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatCurrency } from "@/lib/utils";
-import type { Transaction } from "@/lib/anchor-client";
+import type { AppTransaction as Transaction } from "@/lib/anchor-client";
 import { useState, useEffect } from "react";
 
 interface TransactionsProps {
@@ -22,7 +22,7 @@ interface TransactionsProps {
   loading?: boolean;
 }
 
-const TX_ICONS = {
+const TX_ICONS: Record<string, any> = {
   purchase: ShoppingBag,
   topup: ArrowDownLeft,
   cashback: TrendingUp,
@@ -30,7 +30,7 @@ const TX_ICONS = {
   interest: TrendingUp,
 };
 
-const TX_COLORS = {
+const TX_COLORS: Record<string, string> = {
   purchase: "text-red-400 bg-red-500/10",
   topup: "text-emerald-400 bg-emerald-500/10",
   cashback: "text-yellow-400 bg-yellow-500/10",
@@ -38,13 +38,13 @@ const TX_COLORS = {
   interest: "text-purple-400 bg-purple-500/10",
 };
 
-const STATUS_ICONS = {
+const STATUS_ICONS: Record<string, any> = {
   completed: CheckCircle,
   pending: Clock,
   failed: XCircle,
 };
 
-const STATUS_COLORS = {
+const STATUS_COLORS: Record<string, string> = {
   completed: "text-emerald-400",
   pending: "text-yellow-400",
   failed: "text-red-400",
@@ -88,10 +88,10 @@ export default function Transactions({ transactions, loading }: TransactionsProp
       <CardContent className="p-0">
         <div className="divide-y divide-border">
           {transactions.map((tx) => {
-            const Icon = TX_ICONS[tx.type] || ShoppingBag;
-            const iconClass = TX_COLORS[tx.type] || "text-muted-foreground bg-secondary";
-            const StatusIcon = STATUS_ICONS[tx.status];
-            const statusColor = STATUS_COLORS[tx.status];
+            const Icon = (TX_ICONS as any)[tx.type] || ShoppingBag;
+            const iconClass = (TX_COLORS as any)[tx.type] || "text-muted-foreground bg-secondary";
+            const StatusIcon = (STATUS_ICONS as any)[tx.status];
+            const statusColor = (STATUS_COLORS as any)[tx.status];
             const isPositive = tx.amount > 0;
 
             return (

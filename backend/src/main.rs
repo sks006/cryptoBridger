@@ -13,7 +13,8 @@ use tower_http::cors::{Any, CorsLayer};
 
 mod handlers;
 mod state;
-mod utils;
+
+
 
 use handlers::health;
 use handlers::nfc;        // We are using NFC handlers now
