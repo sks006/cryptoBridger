@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useAnchorProvider } from "./useAnchorProvider";
+import { useSolPrice } from "./useSolPrice";
 import { fetchUserPosition } from "@/lib/anchor-client";
 import { shortenAddress } from "@/lib/utils";
 
@@ -22,6 +23,8 @@ export interface DynamicCardState {
 export function useCardState(): DynamicCardState {
   const { publicKey, connected } = useWallet();
   const provider = useAnchorProvider();
+  const { solUsd, loading: priceLoading } = useSolPrice();
+  
   const [state, setState] = useState<DynamicCardState>({
     cardNumber: "Connect Wallet",
     mode: "credit",
@@ -48,7 +51,8 @@ export function useCardState(): DynamicCardState {
     setState(s => ({ ...s, isLoading: true, error: null }));
 
     try {
-      const pos = await fetchUserPosition(publicKey, provider);
+      if (!solUsd) return; // Wait for price before fetching position
+      const pos = await fetchUserPosition(publicKey, provider, solUsd);
       if (pos) {
         setState(s => ({
           ...s,
@@ -81,7 +85,7 @@ export function useCardState(): DynamicCardState {
         error: e.message || "Failed to load card data",
       }));
     }
-  }, [connected, publicKey, provider]);
+  }, [connected, publicKey, provider, solUsd]);
 
   useEffect(() => {
     refresh();

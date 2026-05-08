@@ -25,8 +25,8 @@ import CardBalance from "@/components/CardBalance";
 import Transactions from "@/app/dashboard/transactions";
 import { useHealthFactor } from "@/hooks/useHealthFactor";
 import { useCardBalance } from "@/hooks/useCardBalance";
-import { getMockTransactions, getMockCardState } from "@/lib/anchor-client";
 import { formatCurrency, shortenAddress } from "@/lib/utils";
+import type { AppTransaction } from "@/lib/anchor-client";
 
 import { useWallet } from "@solana/wallet-adapter-react";
 
@@ -44,8 +44,17 @@ export default function DashboardPage() {
 
   const healthFactor = useHealthFactor(walletAddress);
   const cardBalance = useCardBalance(walletAddress);
-  const transactions = getMockTransactions();
-  const cardState = getMockCardState();
+  
+  const [transactions, setTransactions] = useState<AppTransaction[]>([]);
+  const [cardState, setCardState] = useState({
+    cardNumber: "•••• •••• •••• 4291",
+    expiryDate: "09/27",
+    isFrozen: false,
+    mode: "credit" as const,
+    spendingLimit: 2500,
+    currentDaySpend: 0,
+  });
+
   const monthlySpend = transactions
     .filter((t) => t.type === "purchase" && t.status === "completed")
     .reduce((sum, t) => sum + Math.abs(t.amount), 0);

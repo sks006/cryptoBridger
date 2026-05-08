@@ -72,3 +72,55 @@ export async function nfcTap(params: NfcTapParams): Promise<NfcTapResponse> {
 
   return (await res.json()) as NfcTapResponse;
 }
+
+export async function updateCardSettings(params: any): Promise<void> {
+  console.log("Updating card settings:", params);
+  // Mock implementation
+  return new Promise((resolve) => setTimeout(resolve, 500));
+}
+
+export interface SwipeResponse {
+  success: boolean;
+  message: string;
+  txHash?: string;
+  transactionId: string;
+  newBalance: number;
+  approvedAmount: number;
+  cashbackAmount: number;
+}
+
+export interface BalanceResponse {
+  balance: number;
+  availableCredit: number;
+  currency: string;
+}
+
+export async function getBalance(walletAddress: string): Promise<BalanceResponse> {
+  console.log("Getting balance for:", walletAddress);
+  // Mock implementation
+  return {
+    balance: 1250.0,
+    availableCredit: 8500.0,
+    currency: "EURC",
+  };
+}
+
+export async function swipeCard(params: any): Promise<SwipeResponse> {
+  console.log("Swiping card:", params);
+  // Mock implementation
+  return new Promise((resolve) =>
+    setTimeout(
+      () =>
+        resolve({
+          success: true,
+          message: "Card swiped successfully",
+          txHash: "mock_hash",
+          transactionId: "TX-" + Math.random().toString(36).substr(2, 9),
+          newBalance: 1245.5,
+          approvedAmount: params.amount || 0,
+          cashbackAmount: (params.amount || 0) * 0.02,
+        }),
+      1000
+    )
+  );
+}

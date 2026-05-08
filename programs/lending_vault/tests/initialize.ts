@@ -2,7 +2,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
-import { LendingVault } from "../../target/types/lending_vault";
+import { LendingVault } from "../../../target/types/lending_vault";
 
 describe("lending_vault - Initialize", () => {
   const provider = anchor.AnchorProvider.env();
@@ -20,6 +20,11 @@ describe("lending_vault - Initialize", () => {
     program.programId
   )[0];
 
+  const eurcMintPda = PublicKey.findProgramAddressSync(
+    [Buffer.from("eurc_mint")],
+    program.programId
+  )[0];
+
   it("Initializes the lending vault", async () => {
     console.log("🔨 Initializing Vault PDA:", vaultPda.toBase58());
     console.log("🔨 Vault Token Account PDA:", vaultTokenAccountPda.toBase58());
@@ -32,11 +37,12 @@ describe("lending_vault - Initialize", () => {
           authority: provider.wallet.publicKey,
           vault: vaultPda,
           vaultTokenAccount: vaultTokenAccountPda,
+          eurcMint: eurcMintPda,
           wsolMint: new PublicKey("So11111111111111111111111111111111111111112"), // WSOL Mint
           systemProgram: SystemProgram.programId,
           tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
           rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-        })
+        } as any)
         .rpc();
 
       console.log("✅ Vault initialized successfully!");
@@ -48,7 +54,7 @@ describe("lending_vault - Initialize", () => {
       console.log("\n📊 Vault Configuration:");
       console.log(`   LTV Threshold        : ${vaultAccount.ltvThreshold}%`);
       console.log(`   Liquidation Threshold: ${vaultAccount.liquidationThreshold}%`);
-      console.log(`   Liquidation Bonus    : ${vaultAccount.liquidationBonus}%`);
+
 
     } catch (error: any) {
       if (error.toString().includes("already in use") || error.toString().includes("Account already exists")) {

@@ -43,7 +43,15 @@ export const WSOL_MINT = new PublicKey(process.env.NEXT_PUBLIC_WSOL_MINT!);
 const VAULT_SEED = Buffer.from("vault");
 const VAULT_TOKEN_ACCOUNT_SEED = Buffer.from("vault_token_account");
 const USER_POSITION_SEED = Buffer.from("user_position");
+const EURC_MINT_SEED = Buffer.from("eurc_mint");
 
+
+export function getEurcMintPda(): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [EURC_MINT_SEED],
+    LENDING_PROGRAM_ID,
+  )[0];
+}
 export function getVaultPda(): PublicKey {
   return PublicKey.findProgramAddressSync([VAULT_SEED], LENDING_PROGRAM_ID)[0];
 }
@@ -68,7 +76,7 @@ export function getUserPositionPda(userPubkey: PublicKey): PublicKey {
 export function getLendingProgram(
   provider: AnchorProvider,
 ): Program<LendingVault> {
-  return new (Program as any)(idl, LENDING_PROGRAM_ID, provider);
+  return new (Program as any)(idl, provider);
 }
 
 // ----------------------------------------------------------------------
@@ -96,6 +104,7 @@ export async function fetchUserPosition(
   walletPubkey: PublicKey,
   provider: AnchorProvider,
   solPriceUsd: number,
+  eurUsd: number,
 ): Promise<CollateralPosition | null> {
   if (!isFinite(solPriceUsd) || solPriceUsd <= 0) {
     throw new Error(
@@ -118,14 +127,16 @@ export async function fetchUserPosition(
     const borrowedAmount = position.borrowedAmount.toNumber() / 1e6; // EURC
     const collateralUsd = collateralAmount * solPriceUsd;
 
-    // Health factor: (collateralUsd * LTV%) / borrowedAmount
-    const healthFactor =
-      borrowedAmount > 0
-        ? (collateralUsd * (vault.ltvThreshold / 100)) / borrowedAmount
-        : 9999;
+    // Convert collateral USD → EUR to match the borrowed_amount unit
+    const collateralEur =
+      eurUsd && eurUsd > 0 ? collateralUsd / eurUsd : collateralUsd;
 
-    const maxBorrowable =
-      (collateralUsd * vault.ltvThreshold) / 100 - borrowedAmount;
+const healthFactor = borrowedAmount > 0
+  ? (collateralEur * (vault.ltvThreshold / 100)) / borrowedAmount
+  : 9999;
+
+const maxBorrowable =
+  (collateralEur * vault.ltvThreshold) / 100 - borrowedAmount;
 
     return {
       owner: position.owner.toString(),
@@ -214,6 +225,32 @@ export async function buildDepositTransaction(
 
   tx.add(ix);
   return tx;
+}
+
+// ----------------------------------------------------------------------
+// Types for Real Data
+// ----------------------------------------------------------------------
+
+export interface AppTransaction {
+  id: string;
+  type: "purchase" | "topup" | "cashback" | "swap" | "interest";
+  status: "completed" | "pending" | "failed";
+  amount: number;
+  description: string;
+  timestamp: Date;
+  merchant?: string;
+  txHash?: string;
+}
+
+export interface CardState {
+  cardNumber: string;
+  cvv: string;
+  expiryDate: string;
+  isFrozen: boolean;
+  mode: "credit" | "debit";
+  spendingLimit: number;
+  currentDaySpend: number;
+  monthlySpend: number;
 }
 
 export async function buildBorrowTransaction(

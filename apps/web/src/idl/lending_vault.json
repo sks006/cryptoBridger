@@ -74,108 +74,6 @@
           }
         },
         {
-          "name": "eurc_mint",
-          "docs": [
-            "The EURC mint. Must have `vault` PDA as its mint authority — this is set",
-            "during initialize. On mainnet you'd swap this for a transfer-from-reserve",
-            "model since Circle controls the real EURC mint authority."
-          ],
-          "writable": true
-        },
-        {
-          "name": "user_eurc_account",
-          "docs": [
-            "User's EURC associated token account. Created on first borrow if missing."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "user"
-              },
-              {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "eurc_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
           "name": "sol_price_update",
           "docs": [
             "Pyth SOL/USD price feed (PriceUpdateV2 pull-oracle account)"
@@ -186,18 +84,6 @@
           "docs": [
             "Pyth EUR/USD price feed (for EURC valuation)"
           ]
-        },
-        {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        },
-        {
-          "name": "associated_token_program",
-          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
         },
         {
           "name": "clock",
@@ -356,7 +242,7 @@
         {
           "name": "vault_token_account",
           "docs": [
-            "wSOL collateral vault (unchanged from before)"
+            "Vault's SOL token account (where all collateral will be held)"
           ],
           "writable": true,
           "pda": {
@@ -389,36 +275,10 @@
           }
         },
         {
-          "name": "wsol_mint",
+          "name": "mint",
           "docs": [
-            "wSOL mint — caller passes the canonical wSOL mint address."
+            "We need a mint for wrapped SOL (or use native SOL). For simplicity, we use WSOL mint for MVP."
           ]
-        },
-        {
-          "name": "eurc_mint",
-          "docs": [
-            "NEW: EURC-like mint, owned by the vault PDA.",
-            "Created here with 6 decimals to match real EURC. Vault is mint authority."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  101,
-                  117,
-                  114,
-                  99,
-                  95,
-                  109,
-                  105,
-                  110,
-                  116
-                ]
-              }
-            ]
-          }
         },
         {
           "name": "token_program",
@@ -510,48 +370,24 @@
           "signer": true
         },
         {
-          "name": "vault",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  97,
-                  117,
-                  108,
-                  116
-                ]
-              }
-            ]
-          }
-        },
-        {
           "name": "user_position",
           "writable": true
         },
         {
-          "name": "eurc_mint",
-          "docs": [
-            "Same EURC mint registered in the vault config."
-          ],
+          "name": "vault",
           "writable": true
         },
         {
-          "name": "user_eurc_account",
-          "docs": [
-            "User's EURC ATA — the source of the burn."
-          ],
+          "name": "user_token_account",
+          "writable": true
+        },
+        {
+          "name": "vault_token_account",
           "writable": true
         },
         {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        },
-        {
-          "name": "clock",
-          "address": "SysvarC1ock11111111111111111111111111111111"
         }
       ],
       "args": [
@@ -953,6 +789,10 @@
             "type": "u64"
           },
           {
+            "name": "shares_repaid",
+            "type": "u64"
+          },
+          {
             "name": "remaining_borrowed",
             "type": "u64"
           }
@@ -1028,85 +868,74 @@
           {
             "name": "authority",
             "docs": [
-              "Founder/admin authority — can update config later"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "eurc_mint",
-            "docs": [
-              "EURC-like SPL mint that this vault is the authority of.",
-              "borrow.rs mints from this; repay.rs burns into this."
+              "Authority ( the founder/admin) — can update config later"
             ],
             "type": "pubkey"
           },
           {
             "name": "total_collateral",
             "docs": [
-              "Total SOL deposited (lamports)"
+              "Total SOL deposited by all users (in lamports - smallest SOL unit)"
             ],
             "type": "u64"
           },
           {
             "name": "total_shares",
             "docs": [
-              "Total vault shares issued"
+              "Total vault shares issued (for yield distribution)"
             ],
             "type": "u64"
           },
           {
             "name": "total_borrowed",
             "docs": [
-              "Total EURC borrowed (micro-units)"
+              "Total amount borrowed by all users (in lamports equivalent)"
             ],
             "type": "u64"
           },
           {
             "name": "total_borrowed_shares",
-            "docs": [
-              "Total borrowed shares"
-            ],
             "type": "u64"
           },
           {
             "name": "sol_price_feed",
             "docs": [
-              "Pyth SOL/USD price feed account"
+              "Pyth price feed for SOL/USD (used for collateral valuation)"
             ],
             "type": "pubkey"
           },
           {
             "name": "eur_price_feed",
             "docs": [
-              "Pyth EUR/USD price feed account"
+              "Pyth price feed for EUR/USD (used for EURC valuation)"
             ],
             "type": "pubkey"
           },
           {
             "name": "max_price_age",
             "docs": [
-              "Max price age in seconds (anti-stale)"
+              "Maximum age of price (in seconds) before we reject it (anti-stale attack)"
             ],
             "type": "i64"
           },
           {
             "name": "ltv_threshold",
             "docs": [
-              "LTV percentage — used by borrow (e.g. 80 = 80%)"
+              "Loan-to-Value (LTV) threshold — e.g. 80% = user can borrow up to 80% of collateral value"
             ],
             "type": "u8"
           },
           {
             "name": "liquidation_threshold",
             "docs": [
-              "Liquidation health-factor percentage (e.g. 120 = 1.2x)"
+              "Liquidation threshold — if Health Factor < this, anyone can liquidate"
             ],
             "type": "u8"
           },
           {
             "name": "bump",
             "docs": [
-              "PDA bump"
+              "PDA bump seed"
             ],
             "type": "u8"
           }
