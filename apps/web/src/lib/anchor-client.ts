@@ -1,154 +1,322 @@
-/**
- * Anchor program client for on-chain interactions
- * Manages collateral positions, credit lines, and card state
- */
+// apps/web/src/lib/anchor-client.ts
+// Mock-free client for the Lending Vault Anchor program.
+// Updated: fetchUserPosition now accepts a live SOL/USD price so the
+// health factor and available credit shown in the UI match what the
+// on-chain `borrow` instruction will enforce.
 
+import {
+  Program,
+  AnchorProvider,
+  BN,
+} from "@coral-xyz/anchor";
+import {
+  PublicKey,
+  Transaction,
+  SystemProgram,
+  SYSVAR_CLOCK_PUBKEY,
+} from "@solana/web3.js";
+import {
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddress,
+  createAssociatedTokenAccountInstruction,
+} from "@solana/spl-token";
+import idl from "@/idl/lending_vault.json";
+
+// ----------------------------------------------------------------------
+// Type for our Anchor program (generated typings not available)
+// ----------------------------------------------------------------------
+export type LendingVault = any;
+
+// ----------------------------------------------------------------------
+// Program ID and token mints from environment
+// ----------------------------------------------------------------------
+export const LENDING_PROGRAM_ID = new PublicKey(
+  process.env.NEXT_PUBLIC_LENDING_PROGRAM_ID!,
+);
+export const EURC_MINT = new PublicKey(process.env.NEXT_PUBLIC_EURC_MINT!);
+export const WSOL_MINT = new PublicKey(process.env.NEXT_PUBLIC_WSOL_MINT!);
+
+// ----------------------------------------------------------------------
+// PDA seeds (must match the Rust program)
+// ----------------------------------------------------------------------
+const VAULT_SEED = Buffer.from("vault");
+const VAULT_TOKEN_ACCOUNT_SEED = Buffer.from("vault_token_account");
+const USER_POSITION_SEED = Buffer.from("user_position");
+
+export function getVaultPda(): PublicKey {
+  return PublicKey.findProgramAddressSync([VAULT_SEED], LENDING_PROGRAM_ID)[0];
+}
+
+export function getVaultTokenAccountPda(): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [VAULT_TOKEN_ACCOUNT_SEED],
+    LENDING_PROGRAM_ID,
+  )[0];
+}
+
+export function getUserPositionPda(userPubkey: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [USER_POSITION_SEED, userPubkey.toBuffer()],
+    LENDING_PROGRAM_ID,
+  )[0];
+}
+
+// ----------------------------------------------------------------------
+// Program instance factory
+// ----------------------------------------------------------------------
+export function getLendingProgram(
+  provider: AnchorProvider,
+): Program<LendingVault> {
+  return new (Program as any)(idl, provider);
+}
+
+// ----------------------------------------------------------------------
+// Types (matching UI expectations)
+// ----------------------------------------------------------------------
 export interface CollateralPosition {
   owner: string;
   collateralMint: string;
   collateralSymbol: string;
-  collateralAmount: number;
+  collateralAmount: number; // in SOL
   collateralUsdValue: number;
-  borrowedAmount: number; // in USDC
-  healthFactor: number; // >= 1.0 is safe, < 1.0 is liquidatable
-  liquidationThreshold: number; // e.g. 0.80 = 80%
-  ltv: number; // loan-to-value ratio
+  borrowedAmount: number; // in EURC
+  healthFactor: number;
+  liquidationThreshold: number; // e.g. 1.2 = 120%
+  ltv: number;
   maxBorrowable: number;
+  /** SOL/USD price used for this calculation (so the UI can label it as "live") */
+  solPriceUsd: number;
 }
 
-export interface CardState {
-  isActive: boolean;
-  isFrozen: boolean;
-  spendingLimit: number; // daily limit in USD
-  currentDaySpend: number;
-  monthlySpend: number;
-  cardNumber: string; // masked
-  expiryDate: string;
-  cvv: string; // masked
-  mode: "credit" | "debit";
+// ----------------------------------------------------------------------
+// Real on-chain position fetch — uses LIVE Pyth price passed in from UI
+// ----------------------------------------------------------------------
+export async function fetchUserPosition(
+  walletPubkey: PublicKey,
+  provider: AnchorProvider,
+  solPriceUsd: number,
+): Promise<CollateralPosition | null> {
+  if (!isFinite(solPriceUsd) || solPriceUsd <= 0) {
+    throw new Error(
+      "fetchUserPosition: solPriceUsd is required and must be > 0",
+    );
+  }
+
+  const program = getLendingProgram(provider);
+  const vaultPda = getVaultPda();
+  const positionPda = getUserPositionPda(walletPubkey);
+
+  try {
+    const [vault, position] = await Promise.all([
+      (program.account as any).vault.fetch(vaultPda),
+      (program.account as any).userPosition.fetch(positionPda),
+    ]);
+
+    // Amounts are in native units: lamports (9 decimals) and EURC micro-units (6 decimals)
+    const collateralAmount = position.depositedAmount.toNumber() / 1e9; // SOL
+    const borrowedAmount = position.borrowedAmount.toNumber() / 1e6; // EURC
+    const collateralUsd = collateralAmount * solPriceUsd;
+
+    // Health factor: (collateralUsd * LTV%) / borrowedAmount
+    const healthFactor =
+      borrowedAmount > 0
+        ? (collateralUsd * (vault.ltvThreshold / 100)) / borrowedAmount
+        : 9999;
+
+    const maxBorrowable =
+      (collateralUsd * vault.ltvThreshold) / 100 - borrowedAmount;
+
+    return {
+      owner: position.owner.toString(),
+      collateralMint: WSOL_MINT.toString(),
+      collateralSymbol: "SOL",
+      collateralAmount,
+      collateralUsdValue: collateralUsd,
+      borrowedAmount,
+      healthFactor,
+      liquidationThreshold: vault.liquidationThreshold / 100,
+      ltv: vault.ltvThreshold / 100,
+      maxBorrowable: maxBorrowable > 0 ? maxBorrowable : 0,
+      solPriceUsd,
+    };
+  } catch (e) {
+    // No position yet → return a zero-state position so the UI can render
+    // a "Deposit to get started" view rather than a crash.
+    console.warn("fetchUserPosition: no position yet, returning zero-state", e);
+    return {
+      owner: walletPubkey.toString(),
+      collateralMint: WSOL_MINT.toString(),
+      collateralSymbol: "SOL",
+      collateralAmount: 0,
+      collateralUsdValue: 0,
+      borrowedAmount: 0,
+      healthFactor: 9999,
+      liquidationThreshold: 1.2,
+      ltv: 0.8,
+      maxBorrowable: 0,
+      solPriceUsd,
+    };
+  }
 }
 
-export interface Transaction {
+// ----------------------------------------------------------------------
+// Transaction builders
+// ----------------------------------------------------------------------
+export async function buildDepositTransaction(
+  walletPubkey: PublicKey,
+  amountSol: number,
+  provider: AnchorProvider,
+): Promise<Transaction> {
+  const program = getLendingProgram(provider);
+  const vaultPda = getVaultPda();
+  const vaultTokenAccount = getVaultTokenAccountPda();
+  const userPositionPda = getUserPositionPda(walletPubkey);
+
+  const userWsolAta = await getAssociatedTokenAddress(
+    WSOL_MINT,
+    walletPubkey,
+    false,
+    TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+  );
+
+  const amountLamports = new BN(Math.round(amountSol * 1e9));
+  const tx = new Transaction();
+
+  const accountInfo = await provider.connection.getAccountInfo(userWsolAta);
+  if (!accountInfo) {
+    tx.add(
+      createAssociatedTokenAccountInstruction(
+        walletPubkey,
+        userWsolAta,
+        walletPubkey,
+        WSOL_MINT,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+      ),
+    );
+  }
+
+  const ix = await (program.methods as any)
+    .deposit(amountLamports)
+    .accounts({
+      user: walletPubkey,
+      vault: vaultPda,
+      userPosition: userPositionPda,
+      userTokenAccount: userWsolAta,
+      vaultTokenAccount,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+      clock: SYSVAR_CLOCK_PUBKEY,
+    } as any)
+    .instruction();
+
+  tx.add(ix);
+  return tx;
+}
+
+// ----------------------------------------------------------------------
+// Types for Real Data
+// ----------------------------------------------------------------------
+
+export interface AppTransaction {
   id: string;
   type: "purchase" | "topup" | "cashback" | "swap" | "interest";
+  status: "completed" | "pending" | "failed";
   amount: number;
-  currency: string;
-  merchant?: string;
   description: string;
   timestamp: Date;
-  status: "completed" | "pending" | "failed";
+  merchant?: string;
   txHash?: string;
 }
 
-// Mock program ID (replace with actual deployed program)
-export const PROGRAM_ID = "Lamy7tY3CXv8PqNDvzmJK4qSuFbCJ7dWXNcRL5ZfEHm";
-
-export function getMockCollateralPosition(): CollateralPosition {
-  const collateralUsdValue = 12.5482 * 168.45;
-  const borrowedAmount = 850.0;
-  const healthFactor = (collateralUsdValue * 0.8) / borrowedAmount;
-
-  return {
-    owner: "8xK9mBzLpQRnVwT3cY7dFhJeN2sAuXiCvMoP4gS5tEq",
-    collateralMint: "So11111111111111111111111111111111111111112",
-    collateralSymbol: "SOL",
-    collateralAmount: 12.5482,
-    collateralUsdValue,
-    borrowedAmount,
-    healthFactor,
-    liquidationThreshold: 0.8,
-    ltv: borrowedAmount / collateralUsdValue,
-    maxBorrowable: collateralUsdValue * 0.8 - borrowedAmount,
-  };
+export interface CardState {
+  cardNumber: string;
+  cvv: string;
+  expiryDate: string;
+  isFrozen: boolean;
+  mode: "credit" | "debit";
+  spendingLimit: number;
+  currentDaySpend: number;
+  monthlySpend: number;
 }
 
-export function getMockCardState(): CardState {
-  return {
-    isActive: true,
-    isFrozen: false,
-    spendingLimit: 1000,
-    currentDaySpend: 234.5,
-    monthlySpend: 1847.32,
-    cardNumber: "**** **** **** 4291",
-    expiryDate: "09/28",
-    cvv: "***",
-    mode: "credit",
-  };
+export async function buildBorrowTransaction(
+  walletPubkey: PublicKey,
+  amountEurc: number,
+  provider: AnchorProvider,
+  solPriceUpdate: PublicKey,
+  eurPriceUpdate: PublicKey,
+): Promise<Transaction> {
+  const program = getLendingProgram(provider);
+  const vaultPda = getVaultPda();
+  const userPositionPda = getUserPositionPda(walletPubkey);
+
+  const amountMicro = new BN(Math.round(amountEurc * 1e6));
+
+  const tx = await (program.methods as any)
+    .borrow(amountMicro)
+    .accounts({
+      user: walletPubkey,
+      vault: vaultPda,
+      userPosition: userPositionPda,
+      solPriceUpdate,
+      eurPriceUpdate,
+      clock: SYSVAR_CLOCK_PUBKEY,
+    } as any)
+    .transaction();
+
+  return tx;
 }
 
-export function getMockTransactions(): Transaction[] {
-  const now = new Date();
-  return [
-    {
-      id: "tx_001",
-      type: "purchase",
-      amount: -45.99,
-      currency: "USD",
-      merchant: "Spotify",
-      description: "Spotify Premium",
-      timestamp: new Date(now.getTime() - 2 * 60 * 60 * 1000),
-      status: "completed",
-      txHash: "5KtFn...xR2m",
-    },
-    {
-      id: "tx_002",
-      type: "cashback",
-      amount: 0.92,
-      currency: "USD",
-      description: "2% Cashback Reward",
-      timestamp: new Date(now.getTime() - 2 * 60 * 60 * 1000),
-      status: "completed",
-    },
-    {
-      id: "tx_003",
-      type: "purchase",
-      amount: -128.5,
-      currency: "USD",
-      merchant: "Amazon",
-      description: "Amazon Purchase",
-      timestamp: new Date(now.getTime() - 24 * 60 * 60 * 1000),
-      status: "completed",
-      txHash: "9mFwP...kL4v",
-    },
-    {
-      id: "tx_004",
-      type: "topup",
-      amount: 500.0,
-      currency: "USD",
-      description: "SOL Collateral Deposit",
-      timestamp: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000),
-      status: "completed",
-      txHash: "3xNdQ...hY7p",
-    },
-    {
-      id: "tx_005",
-      type: "interest",
-      amount: 1.24,
-      currency: "USD",
-      description: "Daily Interest Earned",
-      timestamp: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
-      status: "completed",
-    },
-    {
-      id: "tx_006",
-      type: "purchase",
-      amount: -59.99,
-      currency: "USD",
-      merchant: "Netflix",
-      description: "Netflix Subscription",
-      timestamp: new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000),
-      status: "completed",
-      txHash: "7rBkM...cF9z",
-    },
-    {
-      id: "tx_007",
-      type: "swap",
-      amount: -200.0,
-      currency: "USD",
-      description: "SOL → USDC Swap",
-      timestamp: new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000),
-      status: "completed",
-      txHash: "2vGpW...xS1n",
-    },
-  ];
+export async function buildRepayTransaction(
+  walletPubkey: PublicKey,
+  amountEurc: number,
+  provider: AnchorProvider,
+): Promise<Transaction> {
+  const program = getLendingProgram(provider);
+  const vaultPda = getVaultPda();
+  const vaultTokenAccount = getVaultTokenAccountPda();
+  const userPositionPda = getUserPositionPda(walletPubkey);
+
+  const userEurcAta = await getAssociatedTokenAddress(
+    EURC_MINT,
+    walletPubkey,
+    false,
+    TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+  );
+
+  const amountMicro = new BN(Math.round(amountEurc * 1e6));
+  const tx = new Transaction();
+
+  const accountInfo = await provider.connection.getAccountInfo(userEurcAta);
+  if (!accountInfo) {
+    tx.add(
+      createAssociatedTokenAccountInstruction(
+        walletPubkey,
+        userEurcAta,
+        walletPubkey,
+        EURC_MINT,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+      ),
+    );
+  }
+
+  const ix = await (program.methods as any)
+    .repay(amountMicro)
+    .accounts({
+      user: walletPubkey,
+      userPosition: userPositionPda,
+      vault: vaultPda,
+      userTokenAccount: userEurcAta,
+      vaultTokenAccount,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    } as any)
+    .instruction();
+
+  tx.add(ix);
+  return tx;
 }
