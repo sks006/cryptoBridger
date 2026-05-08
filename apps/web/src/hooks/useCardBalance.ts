@@ -30,7 +30,7 @@ export function useCardBalance(walletAddress?: string): CardBalanceState {
     setError(null);
     try {
       const [bal, tok] = await Promise.all([
-        getBalance(walletAddress).catch(() => ({ balance: 0, availableCredit: 0 })),
+        getBalance(walletAddress).catch(() => ({ balance: 0, availableCredit: 0, currency: "EURC" })),
         Promise.resolve(getMockTokenBalances()),
       ]);
       setBalance(bal);

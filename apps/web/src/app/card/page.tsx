@@ -27,7 +27,7 @@ import { Separator } from "@/components/ui/separator";
 import Header from "@/components/cardbridger/Header";
 import Footer from "@/components/cardbridger/Footer";
 import Topup from "@/app/card/topup";
-import { getMockCardState, getMockCollateralPosition } from "@/lib/anchor-client";
+import { type CardState, type CollateralPosition } from "@/lib/anchor-client";
 import { updateCardSettings } from "@/lib/api-client";
 import { formatCurrency } from "@/lib/utils";
 import Link from "next/link";
@@ -45,8 +45,30 @@ export default function CardPage() {
 
   const walletAddress = publicKey?.toBase58() ;
 
-  const [cardState, setCardState] = useState(getMockCardState());
-  const position = getMockCollateralPosition();
+  const [cardState, setCardState] = useState<CardState>({
+    cardNumber: "•••• •••• •••• 4291",
+    cvv: "•••",
+    expiryDate: "09/27",
+    isFrozen: false,
+    mode: "credit",
+    spendingLimit: 2500,
+    currentDaySpend: 0,
+    monthlySpend: 0,
+  });
+
+  const [position, setPosition] = useState<CollateralPosition>({
+    owner: walletAddress || "",
+    collateralMint: "",
+    collateralSymbol: "SOL",
+    collateralAmount: 0,
+    collateralUsdValue: 0,
+    borrowedAmount: 0,
+    healthFactor: 9999,
+    liquidationThreshold: 1.2,
+    ltv: 0.8,
+    maxBorrowable: 0,
+    solPriceUsd: 0,
+  });
   const [showDetails, setShowDetails] = useState(false);
   const [spendingLimit, setSpendingLimit] = useState([cardState.spendingLimit]);
   const [saving, setSaving] = useState(false);

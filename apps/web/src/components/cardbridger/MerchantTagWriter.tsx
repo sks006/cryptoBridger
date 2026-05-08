@@ -2,29 +2,33 @@
 "use client";
 
 import { useState } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
-} from "../ui/card";
-import { Button } from "../ui/button";
-import { Input } from "../ui/input";
-import { Label } from "../ui/label";
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Store,
   Loader2,
   CheckCircle2,
   AlertCircle,
   Radio,
+  Wallet as WalletIcon,
 } from "lucide-react";
-import { useWallet } from "@solana/wallet-adapter-react";
-import { WebNFCManager } from "../../lib/nfc/web-nfc";
+import { WebNFCManager } from "@/lib/nfc/web-nfc";
 
 type WriteState = "idle" | "writing" | "success" | "error";
 
 export default function MerchantTagWriter() {
-  const { publicKey } = useWallet();
+  // Receiver mode requires User B's wallet to be connected — that's the
+  // address EURC will land in when the customer's phone executes the borrow.
+  const { publicKey: receiverPubkey } = useWallet();
+
   const [merchantName, setMerchantName] = useState("");
   const [amount, setAmount] = useState("");
   const [state, setState] = useState<WriteState>("idle");
@@ -36,12 +40,11 @@ export default function MerchantTagWriter() {
   const writeTag = async () => {
     setError(null);
 
-    if (!publicKey) {
-      setError("Connect your merchant wallet first");
+    if (!receiverPubkey) {
+      setError("Connect your Solana wallet first — it's where EURC will be received");
       setState("error");
       return;
     }
-
     const value = parseFloat(amount);
     if (!merchantName.trim()) {
       setError("Enter a merchant name");
@@ -60,8 +63,8 @@ export default function MerchantTagWriter() {
         merchant: merchantName.trim(),
         amount: value.toFixed(2),
         currency: "EUR",
-        recipient: publicKey.toBase58(),
         invoice: `INV-${Date.now().toString(36).toUpperCase()}`,
+        recipient: receiverPubkey.toBase58(),  // User B's wallet — EURC destination
       });
       setState("success");
     } catch (e: any) {
@@ -74,6 +77,10 @@ export default function MerchantTagWriter() {
     setState("idle");
     setError(null);
   };
+
+  const shortAddr = receiverPubkey
+    ? `${receiverPubkey.toBase58().slice(0, 4)}…${receiverPubkey.toBase58().slice(-4)}`
+    : "";
 
   return (
     <Card className="w-full max-w-sm mx-auto border-2 border-cyan-500/30 bg-gradient-to-br from-zinc-900 via-cyan-950/20 to-black shadow-2xl shadow-cyan-500/10">
@@ -96,6 +103,16 @@ export default function MerchantTagWriter() {
             <p className="text-xs text-yellow-200">
               Web NFC is not available on this device. Open this page in
               Chrome on Android to write a tag.
+            </p>
+          </div>
+        )}
+
+        {!receiverPubkey && (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
+            <WalletIcon className="w-4 h-4 text-yellow-400 shrink-0 mt-0.5" />
+            <p className="text-xs text-yellow-200">
+              Connect this phone's wallet first — EURC will be sent here when
+              the customer taps.
             </p>
           </div>
         )}
@@ -129,12 +146,18 @@ export default function MerchantTagWriter() {
               EURC
             </span>
           </div>
+          {receiverPubkey && (
+            <p className="text-xs text-muted-foreground">
+              Receiving wallet:{" "}
+              <span className="font-mono text-cyan-400">{shortAddr}</span>
+            </p>
+          )}
         </div>
 
         {state === "idle" && (
           <Button
             onClick={writeTag}
-            disabled={!supported || !merchantName || !amount}
+            disabled={!supported || !merchantName || !amount || !receiverPubkey}
             className="w-full h-12 text-base font-semibold bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-lg disabled:opacity-50"
           >
             <Radio className="mr-2 h-5 w-5" />
