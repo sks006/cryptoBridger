@@ -7,6 +7,6 @@ pub struct RegisterDevice<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(_ctx: Context<RegisterDevice>, _device_id: String) -> Result<()> {
+pub fn register_device(_ctx: Context<RegisterDevice>, _device_id: String) -> Result<()> {
     Ok(())
 }
