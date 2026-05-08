@@ -5,6 +5,6 @@ pub struct RevokeDevice<'info> {
     pub user: Signer<'info>,
 }
 
-pub fn handler(_ctx: Context<RevokeDevice>) -> Result<()> {
+pub fn revoke_device(_ctx: Context<RevokeDevice>) -> Result<()> {
     Ok(())
 }
