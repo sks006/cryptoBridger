@@ -36,6 +36,3 @@ pub struct Vault {
     pub bump: u8,
 }
 
-impl Vault {
-    pub const LEN: usize = 8 + 32 + 8 + 8 + 32 + 32 + 8 + 1 + 1 + 1; // matches InitSpace
-}
