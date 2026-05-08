@@ -32,7 +32,7 @@ describe("lending_vault - Initialize", () => {
           authority: provider.wallet.publicKey,
           vault: vaultPda,
           vaultTokenAccount: vaultTokenAccountPda,
-          mint: new PublicKey("So11111111111111111111111111111111111111112"), // WSOL Mint
+          wsolMint: new PublicKey("So11111111111111111111111111111111111111112"), // WSOL Mint
           systemProgram: SystemProgram.programId,
           tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
           rent: anchor.web3.SYSVAR_RENT_PUBKEY,

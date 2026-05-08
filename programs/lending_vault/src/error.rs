@@ -42,5 +42,7 @@ pub enum ErrorCode {
     InvalidOwner,
     #[msg("Position is healthy and cannot be liquidated")]
     PositionHealthy,
+    #[msg("Invalid EURC mint")]
+    InvalidEurcMint,
     
 }

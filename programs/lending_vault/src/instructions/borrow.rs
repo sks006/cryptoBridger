@@ -46,7 +46,7 @@ pub struct Borrow<'info> {
     /// model since Circle controls the real EURC mint authority.
     #[account(
         mut,
-        constraint = eurc_mint.key() == vault.eurc_mint @ ErrorCode::InvalidOracleAccount,
+        constraint = eurc_mint.key() == vault.eurc_mint @ ErrorCode::InvalidEurcMint,
     )]
     pub eurc_mint: Account<'info, Mint>,
 
