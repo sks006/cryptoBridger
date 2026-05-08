@@ -187,3 +187,4 @@ programs/*/Cargo.lock
 infrastructure/terraform/.terraform/
 infrastructure/terraform/*.tfstate*
 
+scratch/
