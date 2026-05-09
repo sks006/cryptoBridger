@@ -37,7 +37,7 @@ pub struct Repay<'info> {
     /// Same EURC mint registered in the vault config.
     #[account(
         mut,
-        constraint = eurc_mint.key() == vault.eurc_mint @ ErrorCode::InvalidOracleAccount,
+       constraint = eurc_mint.key() == vault.eurc_mint @ ErrorCode::InvalidEurcMint,
     )]
     pub eurc_mint: Account<'info, Mint>,
 

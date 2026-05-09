@@ -1,8 +1,10 @@
-// programs/lending_vault/tests/initialize.ts
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { PublicKey, SystemProgram, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
+import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { LendingVault } from "../../../target/types/lending_vault";
+
+const WSOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
 
 describe("lending_vault - Initialize", () => {
   const provider = anchor.AnchorProvider.env();
@@ -10,59 +12,46 @@ describe("lending_vault - Initialize", () => {
 
   const program = anchor.workspace.LendingVault as Program<LendingVault>;
 
-  const vaultPda = PublicKey.findProgramAddressSync(
-    [Buffer.from("vault")],
-    program.programId
-  )[0];
+  it("Initializes the lending vault with EURC mint", async () => {
+    const [vaultPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vault")],
+      program.programId,
+    );
+    const [vaultTokenAccount] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vault_token_account")],
+      program.programId,
+    );
+    const [eurcMint] = PublicKey.findProgramAddressSync(
+      [Buffer.from("eurc_mint")],
+      program.programId,
+    );
 
-  const vaultTokenAccountPda = PublicKey.findProgramAddressSync(
-    [Buffer.from("vault_token_account")],
-    program.programId
-  )[0];
+    console.log("📍 Program ID:    ", program.programId.toBase58());
+    console.log("📍 Vault PDA:     ", vaultPda.toBase58());
+    console.log("📍 Vault wSOL ATA:", vaultTokenAccount.toBase58());
+    console.log("📍 EURC Mint PDA: ", eurcMint.toBase58());
 
-  const eurcMintPda = PublicKey.findProgramAddressSync(
-    [Buffer.from("eurc_mint")],
-    program.programId
-  )[0];
-
-  it("Initializes the lending vault", async () => {
-    console.log("🔨 Initializing Vault PDA:", vaultPda.toBase58());
-    console.log("🔨 Vault Token Account PDA:", vaultTokenAccountPda.toBase58());
-    console.log("📍 Using Program ID:", program.programId.toBase58());
-
-    try {
-      const tx = await program.methods
-        .initialize()
-        .accounts({
-          authority: provider.wallet.publicKey,
-          vault: vaultPda,
-          vaultTokenAccount: vaultTokenAccountPda,
-          eurcMint: eurcMintPda,
-          wsolMint: new PublicKey("So11111111111111111111111111111111111111112"), // WSOL Mint
-          systemProgram: SystemProgram.programId,
-          tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
-          rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-        } as any)
-        .rpc();
-
-      console.log("✅ Vault initialized successfully!");
-      console.log("📝 Transaction signature:", tx);
-
-      // Fetch and show vault state
-      const vaultAccount = await program.account.vault.fetch(vaultPda);
-      
-      console.log("\n📊 Vault Configuration:");
-      console.log(`   LTV Threshold        : ${vaultAccount.ltvThreshold}%`);
-      console.log(`   Liquidation Threshold: ${vaultAccount.liquidationThreshold}%`);
-
-
-    } catch (error: any) {
-      if (error.toString().includes("already in use") || error.toString().includes("Account already exists")) {
-        console.log("⚠️ Vault is already initialized.");
-      } else {
-        console.error("❌ Initialization failed:", error);
-        throw error;
-      }
+    const existing = await provider.connection.getAccountInfo(vaultPda);
+    if (existing) {
+      console.log("⚠️  Already initialized. Skipping.");
+      return;
     }
+
+    const tx = await program.methods
+      .initialize()
+      .accounts({
+        authority: provider.wallet.publicKey,
+        vault: vaultPda,
+        vaultTokenAccount,
+        wsolMint: WSOL_MINT,
+        eurcMint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      } as any)
+      .rpc();
+
+    console.log("✅ Initialized! Tx:", tx);
+    console.log("\n🔥 SAVE THIS EURC MINT ADDRESS:", eurcMint.toBase58());
   });
 });
