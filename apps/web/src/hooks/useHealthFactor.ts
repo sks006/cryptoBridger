@@ -8,6 +8,9 @@ import { useAnchorProvider } from "./useAnchorProvider";
 import { useSolPrice } from "./useSolPrice";
 import { fetchUserPosition, type CollateralPosition } from "@/lib/anchor-client";
 
+
+
+
 export interface HealthFactorState {
   position: CollateralPosition | null;
   healthFactor: number;
@@ -42,7 +45,7 @@ function getRiskLevel(hf: number) {
 export function useHealthFactor(address?: string): HealthFactorState {
   const { publicKey: walletPublicKey } = useWallet();
   const provider = useAnchorProvider();
-  const { solUsd, loading: priceLoading, error: priceError } = useSolPrice();
+  const { solUsd, eurUsd, loading: priceLoading, error: priceError } = useSolPrice();
 
   const [position, setPosition] = useState<CollateralPosition | null>(null);
   const [loading, setLoading] = useState(false);
@@ -50,20 +53,19 @@ export function useHealthFactor(address?: string): HealthFactorState {
 
   const fetchPosition = useCallback(async () => {
     const activeAddress = address || walletPublicKey?.toBase58();
-    if (!activeAddress || !provider || !solUsd) return;
+    if (!activeAddress || !provider || !solUsd || !eurUsd) return;
     setLoading(true);
     setError(null);
     try {
       const pubkey = new PublicKey(activeAddress);
-      const pos = await fetchUserPosition(pubkey, provider, solUsd);
+      const pos = await fetchUserPosition(pubkey, provider, solUsd, eurUsd);
       setPosition(pos);
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [address, walletPublicKey?.toBase58(), provider, solUsd]);
-
+  }, [address, walletPublicKey?.toBase58(), provider, solUsd, eurUsd]);
   useEffect(() => {
     fetchPosition();
     // Refresh every 15s — fast enough that the HF visibly drops after a borrow,

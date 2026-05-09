@@ -29,21 +29,22 @@ import idl from "@/idl/lending_vault.json";
 export type LendingVault = any;
 
 // ----------------------------------------------------------------------
-// Program ID and token mints from environment
-// ----------------------------------------------------------------------
-export const LENDING_PROGRAM_ID = new PublicKey(
-  process.env.NEXT_PUBLIC_LENDING_PROGRAM_ID!,
-);
-export const EURC_MINT = new PublicKey(process.env.NEXT_PUBLIC_EURC_MINT!);
-export const WSOL_MINT = new PublicKey(process.env.NEXT_PUBLIC_WSOL_MINT!);
-
-// ----------------------------------------------------------------------
 // PDA seeds (must match the Rust program)
 // ----------------------------------------------------------------------
 const VAULT_SEED = Buffer.from("vault");
 const VAULT_TOKEN_ACCOUNT_SEED = Buffer.from("vault_token_account");
 const USER_POSITION_SEED = Buffer.from("user_position");
 const EURC_MINT_SEED = Buffer.from("eurc_mint");
+
+// ----------------------------------------------------------------------
+// Program ID and token mints from environment
+// ----------------------------------------------------------------------
+export const LENDING_PROGRAM_ID = new PublicKey(
+  process.env.NEXT_PUBLIC_LENDING_PROGRAM_ID!,
+);
+export const EURC_MINT = getEurcMintPda();
+export const WSOL_MINT = new PublicKey(process.env.NEXT_PUBLIC_WSOL_MINT!);
+
 
 
 export function getEurcMintPda(): PublicKey {
@@ -174,58 +175,7 @@ const maxBorrowable =
 // ----------------------------------------------------------------------
 // Transaction builders
 // ----------------------------------------------------------------------
-export async function buildDepositTransaction(
-  walletPubkey: PublicKey,
-  amountSol: number,
-  provider: AnchorProvider,
-): Promise<Transaction> {
-  const program = getLendingProgram(provider);
-  const vaultPda = getVaultPda();
-  const vaultTokenAccount = getVaultTokenAccountPda();
-  const userPositionPda = getUserPositionPda(walletPubkey);
 
-  const userWsolAta = await getAssociatedTokenAddress(
-    WSOL_MINT,
-    walletPubkey,
-    false,
-    TOKEN_PROGRAM_ID,
-    ASSOCIATED_TOKEN_PROGRAM_ID,
-  );
-
-  const amountLamports = new BN(Math.round(amountSol * 1e9));
-  const tx = new Transaction();
-
-  const accountInfo = await provider.connection.getAccountInfo(userWsolAta);
-  if (!accountInfo) {
-    tx.add(
-      createAssociatedTokenAccountInstruction(
-        walletPubkey,
-        userWsolAta,
-        walletPubkey,
-        WSOL_MINT,
-        TOKEN_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID,
-      ),
-    );
-  }
-
-  const ix = await (program.methods as any)
-    .deposit(amountLamports)
-    .accounts({
-      user: walletPubkey,
-      vault: vaultPda,
-      userPosition: userPositionPda,
-      userTokenAccount: userWsolAta,
-      vaultTokenAccount,
-      tokenProgram: TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-      clock: SYSVAR_CLOCK_PUBKEY,
-    } as any)
-    .instruction();
-
-  tx.add(ix);
-  return tx;
-}
 
 // ----------------------------------------------------------------------
 // Types for Real Data
@@ -286,13 +236,14 @@ export async function buildRepayTransaction(
   amountEurc: number,
   provider: AnchorProvider,
 ): Promise<Transaction> {
+  const eurcMint = getEurcMintPda();
   const program = getLendingProgram(provider);
   const vaultPda = getVaultPda();
   const vaultTokenAccount = getVaultTokenAccountPda();
   const userPositionPda = getUserPositionPda(walletPubkey);
 
   const userEurcAta = await getAssociatedTokenAddress(
-    EURC_MINT,
+    eurcMint,
     walletPubkey,
     false,
     TOKEN_PROGRAM_ID,
@@ -309,7 +260,7 @@ export async function buildRepayTransaction(
         walletPubkey,
         userEurcAta,
         walletPubkey,
-        EURC_MINT,
+        eurcMint,
         TOKEN_PROGRAM_ID,
         ASSOCIATED_TOKEN_PROGRAM_ID,
       ),

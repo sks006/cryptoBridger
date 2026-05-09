@@ -25,7 +25,6 @@ import {
   Transaction,
   SystemProgram,
   SYSVAR_CLOCK_PUBKEY,
-
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
@@ -176,7 +175,7 @@ export default function TapToPayPage() {
         eurcMint,
         publicKey,
         false,
-        tokenProgramId,
+        TOKEN_PROGRAM_ID,
         ASSOCIATED_TOKEN_PROGRAM_ID,
       );
       const recipientEurcAta = await getAssociatedTokenAddress(
@@ -213,18 +212,6 @@ export default function TapToPayPage() {
       //     "Account does not exist" or "Provided owner is not allowed"
       //     on a fresh wallet that has never held EURC.
       const userAtaInfo = await provider.connection.getAccountInfo(userEurcAta);
-      if (!userAtaInfo) {
-        tx.add(
-          createAssociatedTokenAccountInstruction(
-            publicKey,
-            userEurcAta,
-            publicKey,
-            eurcMint,
-            tokenProgramId,
-            ASSOCIATED_TOKEN_PROGRAM_ID,
-          ),
-        );
-      }
 
       // 4) Borrow ix — unchanged.
       const borrowIx = await (program.methods as any)
@@ -233,13 +220,13 @@ export default function TapToPayPage() {
           user: publicKey,
           vault: vaultPda,
           userPosition: userPositionPda,
-          eurcMint, // ✅ NEW
-          userEurcAccount: userEurcAta, // ✅ NEW
+          eurcMint, // ← ADD
+          userEurcAccount: userEurcAta, // ← ADD
           solPriceUpdate: SOL_USD_PRICE_UPDATE,
           eurPriceUpdate: EUR_USD_PRICE_UPDATE,
-          tokenProgram: TOKEN_PROGRAM_ID, // ✅ NEW
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, // ✅ NEW
-          systemProgram: SystemProgram.programId, // ✅ NEW
+          tokenProgram: TOKEN_PROGRAM_ID, // ← ADD
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, // ← ADD
+          systemProgram: SystemProgram.programId, // ← ADD
           clock: SYSVAR_CLOCK_PUBKEY,
         } as any)
         .instruction();

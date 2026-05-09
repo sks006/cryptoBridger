@@ -23,7 +23,7 @@ export interface DynamicCardState {
 export function useCardState(): DynamicCardState {
   const { publicKey, connected } = useWallet();
   const provider = useAnchorProvider();
-  const { solUsd, loading: priceLoading } = useSolPrice();
+  const { solUsd, eurUsd, loading: priceLoading } = useSolPrice();
   
   const [state, setState] = useState<DynamicCardState>({
     cardNumber: "Connect Wallet",
@@ -51,8 +51,8 @@ export function useCardState(): DynamicCardState {
     setState(s => ({ ...s, isLoading: true, error: null }));
 
     try {
-      if (!solUsd) return; // Wait for price before fetching position
-      const pos = await fetchUserPosition(publicKey, provider, solUsd);
+      if (!solUsd || !eurUsd) return; // Wait for price before fetching position
+      const pos = await fetchUserPosition(publicKey, provider, solUsd, eurUsd);
       if (pos) {
         setState(s => ({
           ...s,
@@ -85,7 +85,7 @@ export function useCardState(): DynamicCardState {
         error: e.message || "Failed to load card data",
       }));
     }
-  }, [connected, publicKey, provider, solUsd]);
+  }, [connected, publicKey, provider, solUsd, eurUsd]);
 
   useEffect(() => {
     refresh();

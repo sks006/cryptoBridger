@@ -34,6 +34,7 @@ import Link from "next/link";
 
 import { useWallet } from "@solana/wallet-adapter-react";
 
+export const dynamic = "force-dynamic";   // ← add this line
 
 export default function CardPage() {
   const { publicKey } = useWallet();

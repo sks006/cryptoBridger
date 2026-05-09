@@ -1,23 +1,31 @@
-// apps/web/src/components/cardbridger/DepositCollateral.tsx
 "use client";
 
 import { useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useAnchorProvider } from "../../hooks/useAnchorProvider";
-import { buildDepositTransaction } from "../../lib/anchor-client";
 import {
+  getLendingProgram,
+  getVaultPda,
+  getVaultTokenAccountPda,
+  getUserPositionPda,
+  WSOL_MINT,
+} from "../../lib/anchor-client";
+import {
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
   NATIVE_MINT,
   getAssociatedTokenAddress,
   createAssociatedTokenAccountInstruction,
   createSyncNativeInstruction,
 } from "@solana/spl-token";
-import { Transaction, SystemProgram } from "@solana/web3.js";
 import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "../ui/card";
+  Transaction,
+  SystemProgram,
+  SYSVAR_CLOCK_PUBKEY,
+} from "@solana/web3.js";
+import { BN } from "@coral-xyz/anchor";
+
+import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
@@ -32,9 +40,7 @@ import {
 const QUICK_AMOUNTS = [0.5, 1, 2, 5];
 
 interface Props {
-  /** Live SOL/USD price from Pyth Hermes — used only for the preview line */
   solPriceUsd: number | null;
-  /** Called after a successful deposit so the parent can refresh the position */
   onDeposited?: (signature: string) => void;
 }
 
@@ -70,43 +76,67 @@ export default function DepositCollateral({
     setSuccess(null);
 
     try {
-      // 1. Build the on-chain deposit instruction
-      const depositTx = await buildDepositTransaction(
-        publicKey,
-        solAmount,
-        provider,
-      );
+      const program = getLendingProgram(provider);
+      const vaultPda = getVaultPda();
+      const vaultTokenAccount = getVaultTokenAccountPda();
+      const userPositionPda = getUserPositionPda(publicKey);
 
-      // 2. Wrap native SOL → wSOL so the deposit instruction can take it
-      const wSolAta = await getAssociatedTokenAddress(
-        NATIVE_MINT,
+      const userWsolAta = await getAssociatedTokenAddress(
+        NATIVE_MINT,            // same as WSOL_MINT
         publicKey,
         false,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID,
       );
-      const accountInfo = await provider.connection.getAccountInfo(wSolAta);
 
+      const lamports = Math.round(solAmount * 1e9);
       const tx = new Transaction();
-      if (!accountInfo) {
+
+      // 1. Create wSOL ATA if missing — ONCE, here.
+      const ataInfo = await provider.connection.getAccountInfo(userWsolAta);
+      if (!ataInfo) {
         tx.add(
           createAssociatedTokenAccountInstruction(
             publicKey,
-            wSolAta,
+            userWsolAta,
             publicKey,
             NATIVE_MINT,
+            TOKEN_PROGRAM_ID,
+            ASSOCIATED_TOKEN_PROGRAM_ID,
           ),
         );
       }
+
+      // 2. Send native SOL to the wSOL ATA…
       tx.add(
         SystemProgram.transfer({
           fromPubkey: publicKey,
-          toPubkey: wSolAta,
-          lamports: Math.round(solAmount * 1e9),
+          toPubkey: userWsolAta,
+          lamports,
         }),
       );
-      tx.add(createSyncNativeInstruction(wSolAta));
-      tx.add(depositTx.instructions[0]);
 
-      // 3. Sign and send
+      // 3. …and sync so the SPL token balance reflects the lamports.
+      tx.add(createSyncNativeInstruction(userWsolAta));
+
+      // 4. Deposit instruction (program transfers wSOL → vault).
+      const depositIx = await (program.methods as any)
+        .deposit(new BN(lamports))
+        .accounts({
+          user: publicKey,
+          vault: vaultPda,
+          userPosition: userPositionPda,
+          userTokenAccount: userWsolAta,
+          vaultTokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          clock: SYSVAR_CLOCK_PUBKEY,
+        } as any)
+        .instruction();
+
+      tx.add(depositIx);
+
+      // 5. Send.
       const { blockhash, lastValidBlockHeight } =
         await provider.connection.getLatestBlockhash("confirmed");
       tx.recentBlockhash = blockhash;
@@ -115,9 +145,9 @@ export default function DepositCollateral({
       const signed = await signTransaction(tx);
       const signature = await provider.connection.sendRawTransaction(
         signed.serialize(),
+        { skipPreflight: false, preflightCommitment: "confirmed" },
       );
 
-      // 4. Wait for confirmation
       await provider.connection.confirmTransaction(
         { signature, blockhash, lastValidBlockHeight },
         "confirmed",
@@ -146,7 +176,6 @@ export default function DepositCollateral({
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {/* Quick amounts */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           {QUICK_AMOUNTS.map((amt) => (
             <button
@@ -165,7 +194,6 @@ export default function DepositCollateral({
           ))}
         </div>
 
-        {/* Custom amount */}
         <div className="space-y-2">
           <Label htmlFor="deposit-sol-amount">Amount</Label>
           <div className="relative">

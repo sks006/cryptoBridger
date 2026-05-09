@@ -59,9 +59,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
     [appName, appUri, network],
   );
 
-  if (!mounted) {
-    return <ConnectionProvider endpoint={endpoint}>{children}</ConnectionProvider>;
-  }
 
   return (
     <ConnectionProvider endpoint={endpoint}>
