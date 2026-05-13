@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useEffectiveWallet } from "@/hooks/useEffectiveWallet";
 import {
   Card,
   CardContent,
@@ -27,7 +27,7 @@ type WriteState = "idle" | "writing" | "success" | "error";
 export default function MerchantTagWriter() {
   // Receiver mode requires User B's wallet to be connected — that's the
   // address EURC will land in when the customer's phone executes the borrow.
-  const { publicKey: receiverPubkey } = useWallet();
+ const { publicKey: receiverPubkey } = useEffectiveWallet();
 
   const [merchantName, setMerchantName] = useState("");
   const [amount, setAmount] = useState("");

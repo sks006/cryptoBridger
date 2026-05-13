@@ -1,14 +1,45 @@
 "use client";
 
-import { useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
+// =============================================================================
+// DepositCollateral — UI component for SOL → vault deposit
+// =============================================================================
+//
+// Two execution paths:
+//
+//   DESKTOP / IN-APP BROWSER:
+//     1. User clicks "Deposit X SOL"
+//     2. handleDeposit builds the tx, calls wallet.signAndSend
+//     3. signAndSend returns the signature when confirmed
+//     4. We show the success card
+//
+//   MOBILE CHROME (DEEP-LINK):
+//     1. User clicks "Deposit X SOL"
+//     2. handleDeposit builds the tx, calls wallet.signAndSend
+//     3. signAndSend redirects to Phantom — page is unloaded
+//     4. (User approves in Phantom)
+//     5. Phantom redirects back to our page with signed tx in URL params
+//     6. Page reloads. usePhantomMobile picks up the signed tx and stores it
+//        in wallet.pendingSignedTx
+//     7. Our useEffect detects pendingSignedTx, broadcasts via
+//        connection.sendRawTransaction, waits for confirmation
+//     8. We show the success card
+//
+// Critical: in the mobile path, the deposit handler stores the pending state
+// in localStorage BEFORE the redirect, so on return we know there was a
+// pending operation worth resuming.
+//
+// =============================================================================
+
+import { useState, useEffect,useRef } from "react";
+import bs58 from "bs58";
+
+import { useEffectiveWallet } from "../../hooks/useEffectiveWallet";
 import { useAnchorProvider } from "../../hooks/useAnchorProvider";
 import {
   getLendingProgram,
   getVaultPda,
   getVaultTokenAccountPda,
   getUserPositionPda,
-  WSOL_MINT,
 } from "../../lib/anchor-client";
 import {
   TOKEN_PROGRAM_ID,
@@ -37,10 +68,20 @@ import {
   ExternalLink,
 } from "lucide-react";
 
+
+
+// Quick-pick amounts for the UI.
 const QUICK_AMOUNTS = [0.5, 1, 2, 5];
 
+// Storage key for the in-flight deep-link deposit. Stored before redirecting
+// to Phantom, consumed after returning. Helps us know "we have a pending
+// deposit" so we know to broadcast the returned signed tx.
+const PENDING_KEY = "cardbridger:pending_deposit";
+
 interface Props {
+  /** Live SOL/USD price for displaying USD-equivalent of the input. */
   solPriceUsd: number | null;
+  /** Called after a successful deposit so the parent can refresh data. */
   onDeposited?: (signature: string) => void;
 }
 
@@ -48,21 +89,93 @@ export default function DepositCollateral({
   solPriceUsd,
   onDeposited,
 }: Props) {
-  const { publicKey, signTransaction } = useWallet();
+  // Unified wallet — works for desktop, in-app browser, and deep-link.
+  const wallet = useEffectiveWallet();
   const provider = useAnchorProvider();
+  const broadcastingRef = useRef(false);
 
+  // Local UI state.
   const [amount, setAmount] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<{ signature: string } | null>(null);
 
+  // Derived values for the preview line.
   const solAmount = parseFloat(amount) || 0;
   const usdPreview =
     solPriceUsd && solAmount > 0 ? solAmount * solPriceUsd : null;
+  // 80% LTV — matches the on-chain ltv_threshold.
   const creditPreview = usdPreview !== null ? usdPreview * 0.8 : null;
 
+  // ===========================================================================
+  // Deep-link return: broadcast the signed tx
+  // ===========================================================================
+  //
+  // After a deep-link sign, the page reloads with the signed tx in URL params.
+  // usePhantomMobile picks it up and exposes it via wallet.pendingSignedTx.
+  // We watch for that here and broadcast.
+  //
+  // ===========================================================================
+useEffect(() => {
+  // Guard against React strict-mode / re-render double execution.
+  if (broadcastingRef.current) return;
+
+  // Read directly — don't destructure into local vars at top of effect,
+  // because the values you want are on the wallet object at execution time.
+  if (!wallet.pendingSignedTx) return;
+  if (!provider) return;
+
+  // Snapshot the values we need INSIDE the effect run.
+  const signedTxBase58 = wallet.pendingSignedTx;
+  const pending = localStorage.getItem(PENDING_KEY);
+  if (!pending) return;
+
+  // Mark we're broadcasting, then clear from state.
+  broadcastingRef.current = true;
+  wallet.consumePendingSignedTx();
+
+  (async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      console.log("[Deposit] broadcasting signed tx, length:", signedTxBase58.length);
+
+      const signedTxBytes = bs58.decode(signedTxBase58);
+      console.log("[Deposit] decoded tx bytes:", signedTxBytes.length);
+
+      const signature = await provider.connection.sendRawTransaction(
+        signedTxBytes,
+        { skipPreflight: false, preflightCommitment: "confirmed" },
+      );
+      console.log("[Deposit] broadcast OK, signature:", signature);
+
+      await provider.connection.confirmTransaction(signature, "confirmed");
+      console.log("[Deposit] confirmed");
+
+      setSuccess({ signature });
+      setAmount("");
+      localStorage.removeItem(PENDING_KEY);
+      onDeposited?.(signature);
+    } catch (e: any) {
+      console.error("[Deposit] broadcast failed:", e);
+      setError(e?.message ?? "Failed to broadcast signed transaction");
+      localStorage.removeItem(PENDING_KEY);
+    } finally {
+      setLoading(false);
+      broadcastingRef.current = false;
+    }
+  })();
+  // We deliberately don't depend on `wallet` (object identity changes
+  // every render). pendingSignedTx as a string is stable.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [wallet.pendingSignedTx, provider]);
+
+  // ===========================================================================
+  // Main deposit action — builds tx and submits
+  // ===========================================================================
   const handleDeposit = async () => {
-    if (!publicKey || !signTransaction || !provider) {
+    // Pre-flight checks.
+    if (!wallet.connected || !wallet.publicKey || !provider) {
       setError("Please connect your Solana wallet first");
       return;
     }
@@ -76,54 +189,63 @@ export default function DepositCollateral({
     setSuccess(null);
 
     try {
+      // ----- Build PDAs and ATAs ----------------------------------------------
       const program = getLendingProgram(provider);
       const vaultPda = getVaultPda();
       const vaultTokenAccount = getVaultTokenAccountPda();
-      const userPositionPda = getUserPositionPda(publicKey);
+      const userPositionPda = getUserPositionPda(wallet.publicKey);
 
+      // wSOL ATA — the program expects deposits in wrapped SOL since SPL
+      // token::transfer doesn't work with native SOL directly.
       const userWsolAta = await getAssociatedTokenAddress(
-        NATIVE_MINT,            // same as WSOL_MINT
-        publicKey,
-        false,
+        NATIVE_MINT,
+        wallet.publicKey,
+        false,                         // allowOwnerOffCurve
         TOKEN_PROGRAM_ID,
         ASSOCIATED_TOKEN_PROGRAM_ID,
       );
 
+      // SOL → lamports (9 decimals).
       const lamports = Math.round(solAmount * 1e9);
       const tx = new Transaction();
 
-      // 1. Create wSOL ATA if missing — ONCE, here.
+      // ----- Step 1: create wSOL ATA if missing -------------------------------
       const ataInfo = await provider.connection.getAccountInfo(userWsolAta);
       if (!ataInfo) {
         tx.add(
           createAssociatedTokenAccountInstruction(
-            publicKey,
-            userWsolAta,
-            publicKey,
-            NATIVE_MINT,
+            wallet.publicKey,          // payer
+            userWsolAta,                // ata to create
+            wallet.publicKey,           // owner of the ata
+            NATIVE_MINT,                // mint (wSOL)
             TOKEN_PROGRAM_ID,
             ASSOCIATED_TOKEN_PROGRAM_ID,
           ),
         );
       }
 
-      // 2. Send native SOL to the wSOL ATA…
+      // ----- Step 2: send native SOL to the wSOL ATA --------------------------
+      // Just a regular SystemProgram.transfer — moves lamports from the user
+      // to the wSOL ATA, but the SPL token program doesn't yet know about it.
       tx.add(
         SystemProgram.transfer({
-          fromPubkey: publicKey,
+          fromPubkey: wallet.publicKey,
           toPubkey: userWsolAta,
           lamports,
         }),
       );
 
-      // 3. …and sync so the SPL token balance reflects the lamports.
+      // ----- Step 3: sync native --------------------------------------------
+      // Tells the SPL token program "the lamport balance changed, please
+      // update your internal token amount". After this, getTokenAccountBalance
+      // returns the correct wrapped-SOL amount.
       tx.add(createSyncNativeInstruction(userWsolAta));
 
-      // 4. Deposit instruction (program transfers wSOL → vault).
+      // ----- Step 4: deposit ix (Anchor program) ----------------------------
       const depositIx = await (program.methods as any)
         .deposit(new BN(lamports))
         .accounts({
-          user: publicKey,
+          user: wallet.publicKey,
           vault: vaultPda,
           userPosition: userPositionPda,
           userTokenAccount: userWsolAta,
@@ -133,37 +255,43 @@ export default function DepositCollateral({
           clock: SYSVAR_CLOCK_PUBKEY,
         } as any)
         .instruction();
-
       tx.add(depositIx);
 
-      // 5. Send.
-      const { blockhash, lastValidBlockHeight } =
-        await provider.connection.getLatestBlockhash("confirmed");
-      tx.recentBlockhash = blockhash;
-      tx.feePayer = publicKey;
+      // ----- Mark pending if deep-link --------------------------------------
+      // The page is about to unload (deep-link) — we need to remember on
+      // return that we initiated this deposit. The amount is just for UX;
+      // the signed tx in the URL is what we'll actually broadcast.
+      if (wallet.isDeeplink) {
+        localStorage.setItem(
+          PENDING_KEY,
+          JSON.stringify({ amount: solAmount }),
+        );
+      }
 
-      const signed = await signTransaction(tx);
-      const signature = await provider.connection.sendRawTransaction(
-        signed.serialize(),
-        { skipPreflight: false, preflightCommitment: "confirmed" },
-      );
-
-      await provider.connection.confirmTransaction(
-        { signature, blockhash, lastValidBlockHeight },
-        "confirmed",
-      );
+      // ----- Sign & send -----------------------------------------------------
+      // Desktop path: signature comes back synchronously, we set success.
+      // Deep-link path: this throws "Redirecting to Phantom" — we catch
+      // that specifically so it doesn't surface as an error to the user.
+      const signature = await wallet.signAndSend(tx);
 
       setSuccess({ signature });
       setAmount("");
       onDeposited?.(signature);
     } catch (e: any) {
+      // Special case: deep-link redirect throws this on purpose. Swallow it.
+      if (e?.message?.includes("Redirecting to Phantom")) return;
       console.error("Deposit failed:", e);
       setError(e?.message ?? "Transaction failed");
+      // Clear the pending marker since we never actually got to Phantom.
+      localStorage.removeItem(PENDING_KEY);
     } finally {
       setLoading(false);
     }
   };
 
+  // ===========================================================================
+  // Render
+  // ===========================================================================
   return (
     <Card className="w-full max-w-sm mx-auto border-2 border-emerald-500/30 bg-gradient-to-br from-zinc-900 via-emerald-950/20 to-black shadow-2xl shadow-emerald-500/10">
       <CardHeader className="pb-3">
@@ -176,6 +304,7 @@ export default function DepositCollateral({
       </CardHeader>
 
       <CardContent className="space-y-4">
+        {/* Quick-pick amount buttons */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           {QUICK_AMOUNTS.map((amt) => (
             <button
@@ -194,8 +323,9 @@ export default function DepositCollateral({
           ))}
         </div>
 
+        {/* Free-form amount input */}
         <div className="space-y-2">
-          <Label htmlFor="deposit-sol-amount">Amount</Label>
+          <Label htmlFor="deposit-sol-amount" className="text-zinc-300">Amount</Label>
           <div className="relative">
             <Input
               id="deposit-sol-amount"
@@ -213,7 +343,7 @@ export default function DepositCollateral({
             </span>
           </div>
           {usdPreview !== null && creditPreview !== null && (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-zinc-400">
               ≈ ${usdPreview.toFixed(2)} USD · unlocks{" "}
               <span className="text-emerald-400 font-semibold">
                 ~${creditPreview.toFixed(2)}
@@ -223,6 +353,7 @@ export default function DepositCollateral({
           )}
         </div>
 
+        {/* Error banner */}
         {error && (
           <div className="flex items-start gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/30">
             <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
@@ -230,6 +361,7 @@ export default function DepositCollateral({
           </div>
         )}
 
+        {/* Success banner with explorer link */}
         {success && (
           <div className="flex items-start gap-2 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
             <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
@@ -250,17 +382,23 @@ export default function DepositCollateral({
           </div>
         )}
 
+        {/* Submit button */}
         <Button
           onClick={handleDeposit}
-          disabled={loading || !solAmount || !publicKey}
+          disabled={loading || !solAmount || !wallet.connected}
           className="w-full h-12 text-base font-semibold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-lg disabled:opacity-50"
         >
           {loading ? (
             <>
               <Loader2 className="w-4 h-4 animate-spin mr-2" />
-              Confirming on Solana…
+              {/* Different label for deep-link to set the right expectation. */}
+              {wallet.isDeeplink
+                ? wallet.pendingSignedTx
+                  ? "Broadcasting on Solana…"
+                  : "Redirecting to Phantom…"
+                : "Confirming on Solana…"}
             </>
-          ) : !publicKey ? (
+          ) : !wallet.connected ? (
             "Connect wallet to deposit"
           ) : solAmount > 0 ? (
             <>Deposit {solAmount} SOL</>

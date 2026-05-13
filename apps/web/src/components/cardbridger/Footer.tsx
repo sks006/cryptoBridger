@@ -40,7 +40,7 @@ export default function Footer() {
             <ul className="space-y-2">
               {[
                 { href: "/dashboard", label: "Dashboard" },
-                { href: "/card", label: "Lamyt Card" },
+                { href: "/card", label: "CardBridger Card" },
                 { href: "/swap", label: "Swap" },
                 { href: "/pos-simulator", label: "POS Simulator" },
               ].map((item) => (
@@ -96,7 +96,7 @@ export default function Footer() {
         <Separator className="my-8" />
 
         <div className="flex flex-col sm:flex-row justify-between items-center gap-4 text-xs text-muted-foreground">
-          <p>© 2026 Lamyt Finance. Built on Solana.</p>
+          <p>© 2026 CardBridger Finance. Built on Solana.</p>
           <div className="flex items-center gap-4">
             <a href="#" className="hover:text-foreground transition-colors">Privacy Policy</a>
             <a href="#" className="hover:text-foreground transition-colors">Terms of Service</a>
