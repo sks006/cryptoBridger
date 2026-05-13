@@ -1,25 +1,22 @@
 // apps/web/src/app/nfc/tap/page.tsx
 //
-// MOBILE-OPTIMIZED for Chrome Android.
+// Tap to Pay page — QR-based merchant ↔ customer payment flow.
 //
-// What changed for mobile:
-//   - Cards reordered so tap card is FIRST on mobile (thumb-reachable),
-//     deposit form is second. Desktop keeps the side-by-side layout.
-//   - All tap targets ≥ 44px (Android/iOS minimum).
-//   - <input> uses inputMode="decimal" so the numeric keypad opens with a
-//     decimal point. text-base (16px) prevents iOS zoom-on-focus.
-//   - Pyth strip restructured to fit a 360px viewport without wrapping ugly.
-//   - Mode toggle uses flex-1 instead of min-w-[160px].
-//   - Sticky status banner during scanning so users can read the state
-//     while phones are held together (the visible strip is at the top edge).
-//   - Safe-area insets for notched/cutout phones.
-//   - Active scale-down on buttons for tactile feedback.
+// Sender mode: customer scans the merchant's QR with the device camera.
+//   1. Tap "Scan to Pay" → camera opens
+//   2. QR decoded → stored as `pendingPayment` (NOT auto-executed)
+//   3. Phishing-protection card shows merchant + amount + recipient address
+//   4. User taps "Confirm & Pay" → borrow+transfer fires
+//   5. Phantom signs → tx broadcasts → success card with explorer link
+//
+// Receiver mode: merchant generates a fresh QR with name + amount.
+//   QR encodes JSON payload including: merchant, amount, recipient wallet,
+//   invoice ID, timestamp. Customer's app validates and rejects stale QRs.
 
 "use client";
 
-import { useState, useRef, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import Link from "next/link";
-import { useWallet } from "@solana/wallet-adapter-react";
 import {
   PublicKey,
   Transaction,
@@ -28,43 +25,40 @@ import {
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
-  TOKEN_2022_PROGRAM_ID, // ✅ correct package
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddress,
   createAssociatedTokenAccountInstruction,
-  createTransferCheckedInstruction, // ✅ swap from createTransferInstruction
+  createTransferCheckedInstruction,
 } from "@solana/spl-token";
 import { BN } from "@coral-xyz/anchor";
 
+import { useEffectiveWallet } from "@/hooks/useEffectiveWallet";
 import { useAnchorProvider } from "@/hooks/useAnchorProvider";
 import { useHealthFactor } from "@/hooks/useHealthFactor";
 import { useSolPrice } from "@/hooks/useSolPrice";
 import {
-  EURC_MINT,
   getLendingProgram,
   getUserPositionPda,
   getVaultPda,
   getEurcMintPda,
 } from "@/lib/anchor-client";
 import { SOL_USD_PRICE_UPDATE, EUR_USD_PRICE_UPDATE } from "@/lib/pyth-feeds";
-import {
-  WebNFCManager,
-  type NFCTapState,
-  type NFCReceipt,
-  type MerchantPayload,
-} from "@/lib/nfc/web-nfc";
 
 import Header from "@/components/cardbridger/Header";
 import Footer from "@/components/cardbridger/Footer";
 import DepositCollateral from "@/components/cardbridger/DepositCollateral";
-import MerchantTagWriter from "@/components/cardbridger/MerchantTagWriter";
+import MerchantQRDisplay, {
+  type MerchantQRPayload,
+} from "@/components/cardbridger/MerchantQRDisplay";
+import QRScanner from "@/components/cardbridger/QRScanner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+
 import {
-  Smartphone,
+  Camera,
   Store,
   Wallet,
   Activity,
@@ -74,15 +68,30 @@ import {
   AlertCircle,
   ExternalLink,
   RotateCcw,
-  Radio,
 } from "lucide-react";
 
-const QUICK_EUR_AMOUNTS = [5, 10, 25, 50, 100];
+// Same NFC state type used elsewhere — we keep the names to avoid touching
+// downstream code. "scanning" now means "camera open", "reading" is unused.
+type PayState =
+  | "idle"
+  | "scanning"
+  | "borrowing"
+  | "logging"
+  | "success"
+  | "error";
 
-const STATE_LABEL: Record<NFCTapState, string> = {
+interface Receipt {
+  receiptId: string;
+  amount: number;
+  merchantName: string;
+  timestamp: string;
+  txHash: string;
+  message: string;
+}
+
+const STATE_LABEL: Record<PayState, string> = {
   idle: "Ready to pay",
-  scanning: "Hold near merchant tag…",
-  reading: "Tag detected — verifying",
+  scanning: "Open camera to scan…",
   borrowing: "Borrowing & transferring on Solana…",
   logging: "Confirming receipt…",
   success: "Payment confirmed",
@@ -90,7 +99,7 @@ const STATE_LABEL: Record<NFCTapState, string> = {
 };
 
 export default function TapToPayPage() {
-  const { publicKey, signTransaction } = useWallet();
+  const wallet = useEffectiveWallet();
   const provider = useAnchorProvider();
 
   // ---- live data ---------------------------------------------------------
@@ -101,18 +110,23 @@ export default function TapToPayPage() {
     riskLabel,
     refresh: refreshPosition,
     solPriceUsd,
-  } = useHealthFactor();
+  } = useHealthFactor(wallet.publicKey?.toBase58());
+
   const { solUsd, eurUsd, publishTimeMs } = useSolPrice();
 
   // ---- ui state ----------------------------------------------------------
   const [mode, setMode] = useState<"sender" | "receiver">("sender");
-  const [amount, setAmount] = useState<number>(5);
-  const [nfcState, setNfcState] = useState<NFCTapState>("idle");
-  const [receipt, setReceipt] = useState<NFCReceipt | null>(null);
+  const [payState, setPayState] = useState<PayState>("idle");
+  const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const nfcManagerRef = useRef<WebNFCManager | null>(null);
-  if (!nfcManagerRef.current) nfcManagerRef.current = new WebNFCManager();
+  // QR flow state
+  const broadcastingRef = useRef(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  // Staged after scan; user must confirm before signing. Anti-phishing.
+  const [pendingPayment, setPendingPayment] = useState<MerchantQRPayload | null>(
+    null,
+  );
 
   // ---- derived limits ---------------------------------------------------
   const collateralUsd = position?.collateralUsdValue ?? 0;
@@ -120,60 +134,47 @@ export default function TapToPayPage() {
   const availableCreditEur =
     eurUsd && eurUsd > 0 ? availableCreditUsd / eurUsd : availableCreditUsd;
 
-  const isOverLimit = amount > availableCreditEur;
   const tooLowHF = healthFactor < 1.2;
-  const canTap =
-    !!publicKey &&
-    amount > 0 &&
-    !isOverLimit &&
-    !tooLowHF &&
-    nfcState === "idle";
-
-  const nfcSupported =
-    typeof window !== "undefined" && WebNFCManager.isSupported();
+  const canPay = !!wallet.connected && payState === "idle" && !tooLowHF;
 
   // ---- borrow + transfer atomic transaction -----------------------------
   const borrowAndGetSignature = useCallback(
-    async (eurcAmount: number, merchant: MerchantPayload): Promise<string> => {
-      if (!publicKey || !provider || !signTransaction) {
+    async (
+      eurcAmount: number,
+      merchant: {
+        merchant: string;
+        amount: string;
+        currency: string;
+        recipient: string;
+      },
+    ): Promise<string> => {
+      if (!wallet.publicKey || !provider) {
         throw new Error("Wallet is not connected");
       }
       if (!merchant.recipient) {
-        throw new Error("Merchant tag is missing the recipient address");
+        throw new Error("Merchant payload missing recipient");
       }
 
       const recipientPubkey = new PublicKey(merchant.recipient);
       const eurcMint = getEurcMintPda();
       const program = getLendingProgram(provider);
       const vaultPda = getVaultPda();
-      const userPositionPda = getUserPositionPda(publicKey);
+      const userPositionPda = getUserPositionPda(wallet.publicKey);
 
-      // 1) Detect which token program owns the EURC mint.
+      // Verify the EURC mint exists on this cluster — fails early if the
+      // vault hasn't been initialized on the network the user is connected to.
       const mintInfo = await provider.connection.getAccountInfo(eurcMint);
       if (!mintInfo) {
         throw new Error(
           `EURC mint ${eurcMint.toBase58()} not found on this cluster. ` +
-            `Check NEXT_PUBLIC_EURC_MINT and that you're on Devnet.`,
-        );
-      }
-      const tokenProgramId = mintInfo.owner;
-
-      // Sanity: must be one of the two known token programs.
-      if (
-        !tokenProgramId.equals(TOKEN_PROGRAM_ID) &&
-        !tokenProgramId.equals(TOKEN_2022_PROGRAM_ID)
-      ) {
-        throw new Error(
-          `Mint ${eurcMint.toBase58()} is not a token mint (owner: ${tokenProgramId.toBase58()})`,
+            `Make sure you're on Devnet and the program is initialized.`,
         );
       }
 
-      // 2) Derive ATAs USING the detected token program — this was the bug.
-      //    getAssociatedTokenAddress signature:
-      //    (mint, owner, allowOwnerOffCurve, programId, associatedTokenProgramId)
+      // Derive ATAs — vault-controlled mint is legacy SPL Token.
       const userEurcAta = await getAssociatedTokenAddress(
         eurcMint,
-        publicKey,
+        wallet.publicKey,
         false,
         TOKEN_PROGRAM_ID,
         ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -187,17 +188,16 @@ export default function TapToPayPage() {
       );
 
       const amountMicro = new BN(Math.round(eurcAmount * 1e6));
-      const amountRaw = Math.round(eurcAmount * 1e6);
-
       const tx = new Transaction();
 
-      // 3) Create recipient ATA if missing — pass matching token program.
+      // Create recipient ATA if missing — borrow.rs init_if_needed only
+      // handles the *user's* ATA, not the merchant's.
       const recipientAtaInfo =
         await provider.connection.getAccountInfo(recipientEurcAta);
       if (!recipientAtaInfo) {
         tx.add(
           createAssociatedTokenAccountInstruction(
-            publicKey,
+            wallet.publicKey,
             recipientEurcAta,
             recipientPubkey,
             eurcMint,
@@ -207,39 +207,32 @@ export default function TapToPayPage() {
         );
       }
 
-      // 3b) Also create the USER's ATA if it's missing.
-      //     Without this, the transfer instruction below will fail with
-      //     "Account does not exist" or "Provided owner is not allowed"
-      //     on a fresh wallet that has never held EURC.
-      const userAtaInfo = await provider.connection.getAccountInfo(userEurcAta);
-
-      // 4) Borrow ix — unchanged.
+      // Borrow ix — mints EURC into user's ATA atomically.
       const borrowIx = await (program.methods as any)
         .borrow(amountMicro)
         .accounts({
-          user: publicKey,
+          user: wallet.publicKey,
           vault: vaultPda,
           userPosition: userPositionPda,
-          eurcMint, // ← ADD
-          userEurcAccount: userEurcAta, // ← ADD
+          eurcMint,
+          userEurcAccount: userEurcAta,
           solPriceUpdate: SOL_USD_PRICE_UPDATE,
           eurPriceUpdate: EUR_USD_PRICE_UPDATE,
-          tokenProgram: TOKEN_PROGRAM_ID, // ← ADD
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, // ← ADD
-          systemProgram: SystemProgram.programId, // ← ADD
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
           clock: SYSVAR_CLOCK_PUBKEY,
         } as any)
         .instruction();
       tx.add(borrowIx);
 
-      // 5) Transfer ix — use TransferChecked (works for both Token & Token-2022)
-      //    and pass the token program explicitly.
+      // Transfer EURC user → merchant.
       tx.add(
         createTransferCheckedInstruction(
           userEurcAta,
           eurcMint,
           recipientEurcAta,
-          publicKey,
+          wallet.publicKey,
           Math.round(eurcAmount * 1e6),
           6,
           [],
@@ -247,113 +240,131 @@ export default function TapToPayPage() {
         ),
       );
 
-      const { blockhash, lastValidBlockHeight } =
-        await provider.connection.getLatestBlockhash("confirmed");
-      tx.recentBlockhash = blockhash;
-      tx.feePayer = publicKey;
-
-      const signed = await signTransaction(tx);
-      const signature = await provider.connection.sendRawTransaction(
-        signed.serialize(),
-        { skipPreflight: false, preflightCommitment: "confirmed" },
-      );
-      await provider.connection.confirmTransaction(
-        { signature, blockhash, lastValidBlockHeight },
-        "confirmed",
-      );
-
+      // Use the unified wallet abstraction. Desktop signs+broadcasts here;
+      // deep-link redirects to Phantom and the broadcast happens after return.
+      const signature = await wallet.signAndSend(tx);
       return signature;
     },
-    [publicKey, provider, signTransaction],
+    [wallet, provider],
   );
 
-  // ---- handlers ---------------------------------------------------------
-  const handleStartScan = useCallback(async () => {
+  // ---- QR handlers ------------------------------------------------------
+  //
+  // handleQRScanned just STAGES the payment — does NOT auto-fire the
+  // transaction. The user has to explicitly confirm via the confirmation
+  // card. This is the anti-phishing layer.
+
+  const handleQRScanned = useCallback((payload: MerchantQRPayload) => {
+    setScannerOpen(false);
     setError(null);
     setReceipt(null);
+    setPendingPayment(payload);
+  }, []);
 
-    if (!publicKey) {
-      setError("Connect your Solana wallet first.");
-      setNfcState("error");
+  // Called when user taps Confirm & Pay in the verification card.
+  const handleConfirmPayment = useCallback(async () => {
+    if (!pendingPayment) return;
+    const payload = pendingPayment;
+    setPendingPayment(null);
+
+    const eurcAmount = parseFloat(payload.amount);
+    if (!isFinite(eurcAmount) || eurcAmount <= 0) {
+      setError("Invalid amount in QR");
+      setPayState("error");
+      return;
+    }
+    if (eurcAmount > availableCreditEur) {
+      setError(
+        `Amount €${eurcAmount.toFixed(2)} exceeds your available credit (€${availableCreditEur.toFixed(2)}).`,
+      );
+      setPayState("error");
       return;
     }
     if (tooLowHF) {
       setError("Health factor too low. Add more collateral before spending.");
-      setNfcState("error");
-      return;
-    }
-    if (isOverLimit) {
-      setError(
-        `Amount exceeds your available credit (€${availableCreditEur.toFixed(2)}).`,
-      );
-      setNfcState("error");
+      setPayState("error");
       return;
     }
 
-    if (!nfcSupported) {
-      try {
-        setNfcState("borrowing");
-        const sig = await borrowAndGetSignature(amount, {
-          merchant: "Direct Pay (no NFC)",
-          amount: amount.toFixed(2),
-          currency: "EUR",
-          recipient: publicKey.toBase58(),
-        });
-        setReceipt({
-          receiptId: `RCPT-${Date.now().toString(36).toUpperCase()}`,
-          amount,
-          merchantName: "Direct Pay (no NFC)",
-          timestamp: new Date().toISOString(),
-          txHash: sig,
-          message: "Borrowed on Solana without NFC scan",
-        });
-        setNfcState("success");
-        refreshPosition();
-      } catch (e: any) {
-        setError(e?.message ?? "Borrow failed");
-        setNfcState("error");
-      }
-      return;
-    }
+  try {
+  setPayState("borrowing");
+  
+  // Mark this as in-flight BEFORE Phantom redirects (deep-link path).
+  // After redirect-back, the useEffect below uses this marker to know
+  // there's a pay tx waiting to be broadcast.
+  if (wallet.isDeeplink) {
+    localStorage.setItem(
+      "cardbridger:pending_pay",
+      JSON.stringify({
+        merchant: payload.merchant,
+        amount: payload.amount,
+        invoice: payload.invoice,
+      }),
+    );
+  }
+  
+  const sig = await borrowAndGetSignature(eurcAmount, {
+    merchant: payload.merchant,
+    amount: payload.amount,
+    currency: payload.currency,
+    recipient: payload.recipient,
+  });
 
-    await nfcManagerRef.current!.startScan({
-      amount,
-      walletAddress: publicKey.toBase58(),
-      onStateChange: setNfcState,
-      onReceipt: (r) => {
-        setReceipt(r);
-        refreshPosition();
-      },
-      onError: (msg) => setError(msg),
-      borrowAndGetSignature,
-    });
+      setReceipt({
+        receiptId: payload.invoice,
+        amount: eurcAmount,
+        merchantName: payload.merchant,
+        timestamp: new Date().toISOString(),
+        txHash: sig,
+        message: "Paid via QR scan",
+      });
+      setPayState("success");
+      refreshPosition();
+      localStorage.removeItem("cardbridger:pending_pay");
+    } catch (e: any) {
+  if (e?.message?.includes("Redirecting to Phantom")) return;
+  setError(e?.message ?? "Payment failed");
+  setPayState("error");
+  // Clear marker so a future retry isn't tricked into thinking there's
+  // a pay in flight when there isn't.
+  localStorage.removeItem("cardbridger:pending_pay");
+}
   }, [
-    publicKey,
-    amount,
-    tooLowHF,
-    isOverLimit,
+    pendingPayment,
     availableCreditEur,
-    nfcSupported,
+    tooLowHF,
     borrowAndGetSignature,
     refreshPosition,
+    wallet.isDeeplink,
   ]);
 
-  const handleReset = useCallback(() => {
-    nfcManagerRef.current?.stopScan();
-    setNfcState("idle");
+  const handleStartScan = useCallback(() => {
     setError(null);
     setReceipt(null);
+
+    if (!wallet.connected) {
+      setError("Connect your Solana wallet first.");
+      setPayState("error");
+      return;
+    }
+    if (tooLowHF) {
+      setError("Health factor too low. Add more collateral before spending.");
+      setPayState("error");
+      return;
+    }
+
+    setScannerOpen(true);
+  }, [wallet.connected, tooLowHF]);
+
+  const handleReset = useCallback(() => {
+    setPayState("idle");
+    setError(null);
+    setReceipt(null);
+    setPendingPayment(null);
+    setScannerOpen(false);
   }, []);
 
-  useEffect(() => {
-    return () => nfcManagerRef.current?.stopScan();
-  }, []);
-
-  const isProcessing =
-    nfcState === "scanning" ||
-    nfcState === "reading" ||
-    nfcState === "borrowing" ||
-    nfcState === "logging";
+  const isProcessing = payState === "borrowing" || payState === "logging";
 
   const priceTimeAgo = useMemo(() => {
     if (!publishTimeMs) return null;
@@ -363,11 +374,121 @@ export default function TapToPayPage() {
     );
     return `${seconds}s ago`;
   }, [publishTimeMs, solUsd]);
+// =========================================================================
+// Deep-link return: broadcast the pay-flow signed tx
+// =========================================================================
+//
+// On mobile Chrome, after the user approves the pay tx in Phantom, the page
+// reloads with the signed tx encoded in the URL. usePhantomMobile parses it
+// and exposes it via wallet.pendingSignedTx.
+//
+// This effect:
+//   1. Checks if there's a signed tx waiting
+//   2. Confirms it was a pay (via localStorage marker) — NOT a deposit
+//   3. Broadcasts to Solana
+//   4. Shows the success card
+//
+// Without this watcher, the signed tx sits in state forever and nothing
+// happens after Phantom returns.
+// =========================================================================
+useEffect(() => {
+//   // 1. Is there a pending signed tx in the wallet state?
+// //    (Only works if you have access to the wallet state from the dev tools.
+// //     Instead, look for the stored session.)
+// console.log(localStorage.getItem('cardbridger:pending_pay'));
+
+// // 2. Are the session keys present?
+// console.log(localStorage.getItem('phantom:session'));
+// console.log(localStorage.getItem('phantom:phantom_pubkey'));
+//   if (!wallet.pendingSignedTx) {
+//     broadcastingRef.current = false;
+//     return;
+//   }
+//   if (!provider) return;
+//   if (broadcastingRef.current) return;
+
+//   const pendingStr = localStorage.getItem("cardbridger:pending_pay");
+//   if (!pendingStr) return;
+
+  console.log('[PayEffect] start');
+  console.log('[PayEffect] wallet.pendingSignedTx:', wallet.pendingSignedTx);
+  console.log('[PayEffect] localStorage pending_pay:', localStorage.getItem('cardbridger:pending_pay'));
+
+  if (!wallet.pendingSignedTx) {
+    console.log('[PayEffect] NO pendingSignedTx – aborting');
+    broadcastingRef.current = false;
+    return;
+  }
+  if (!provider) {
+    console.log('[PayEffect] NO provider – aborting');
+    return;
+  }
+  if (broadcastingRef.current) {
+    console.log('[PayEffect] already broadcasting – aborting');
+    return;
+  }
+
+  const pendingStr = localStorage.getItem("cardbridger:pending_pay");
+  if (!pendingStr) {
+    console.log('[PayEffect] NO pending_pay in localStorage – aborting');
+    return;
+  }
+
+  broadcastingRef.current = true;
+
+  const pending = JSON.parse(pendingStr) as {
+    merchant: string;
+    amount: string;
+    invoice: string;
+  };
+
+  const signedTxBase58 = wallet.consumePendingSignedTx();
+    console.log('[PayEffect] signedTxBase58:', !!signedTxBase58);
+
+  if (!signedTxBase58) return;
+
+  // Lazy import bs58 (small, only loaded when this path runs).
+  import("bs58").then(async (bs58Module) => {
+    const bs58 = bs58Module.default;
+    try {
+      setPayState("borrowing");
+      setError(null);
+
+      const signedTxBytes = bs58.decode(signedTxBase58);
+      console.log("SignedTxBytes decoded:", signedTxBytes);
+
+      const signature = await provider.connection.sendRawTransaction(
+        signedTxBytes,
+        { skipPreflight: true, preflightCommitment: "confirmed" },
+      );
+      console.log("Tx signature:", signature);
+      await provider.connection.confirmTransaction(signature, "confirmed");
+
+      setReceipt({
+        receiptId: pending.invoice,
+        amount: parseFloat(pending.amount),
+        merchantName: pending.merchant,
+        timestamp: new Date().toISOString(),
+        txHash: signature,
+        message: "Paid via QR scan + Phantom mobile",
+      });
+      setPayState("success");
+      localStorage.removeItem("cardbridger:pending_pay");
+      refreshPosition();
+    } catch (e: any) {
+      console.error("[Pay] broadcast failed:", e);
+      setError(e?.message ?? "Failed to broadcast signed transaction");
+      setPayState("error");
+      localStorage.removeItem("cardbridger:pending_pay");
+    }
+  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [wallet.pendingSignedTx, provider]);
+
 
   return (
     <div
       className="min-h-screen flex flex-col animated-gradient"
-      // safe-area insets for phones with display cutouts
       style={{
         paddingTop: "env(safe-area-inset-top)",
         paddingBottom: "env(safe-area-inset-bottom)",
@@ -375,7 +496,7 @@ export default function TapToPayPage() {
     >
       <Header />
 
-      {/* Sticky NFC status banner — visible at top edge of phone while phones are held together */}
+      {/* Sticky status banner during processing */}
       {isProcessing && (
         <div
           className="sticky top-0 z-50 bg-emerald-600/95 backdrop-blur-md border-b border-emerald-400/40 shadow-lg"
@@ -385,7 +506,7 @@ export default function TapToPayPage() {
           <div className="container mx-auto px-4 py-3 flex items-center justify-center gap-2 text-white">
             <Loader2 className="w-4 h-4 animate-spin shrink-0" />
             <span className="text-sm font-semibold tracking-wide truncate">
-              {STATE_LABEL[nfcState]}
+              {STATE_LABEL[payState]}
             </span>
           </div>
         </div>
@@ -395,18 +516,17 @@ export default function TapToPayPage() {
         {/* Hero */}
         <div className="text-center max-w-xl mx-auto mb-5 sm:mb-8">
           <h1 className="text-2xl sm:text-4xl font-bold tracking-tight mb-1 sm:mb-2">
-            Tap to Pay
+            Scan to Pay
           </h1>
           <p className="text-sm sm:text-base text-muted-foreground px-2">
             Spend crypto without selling — powered by Solana
           </p>
         </div>
 
-        {/* Live Pyth strip — mobile-friendly, no awkward wrapping */}
+        {/* Live Pyth strip */}
         <div className="max-w-xl mx-auto mb-5 sm:mb-8">
           <Card className="border border-emerald-500/20 bg-gradient-to-r from-emerald-500/5 via-cyan-500/5 to-emerald-500/5">
             <CardContent className="py-2.5 px-3 sm:py-3 sm:px-4">
-              {/* On mobile: stacked rows. On desktop: single row. */}
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 sm:gap-3">
                 <div className="flex items-center gap-2 text-[10px] sm:text-xs font-medium uppercase tracking-wider text-emerald-300">
                   <span className="relative flex h-2 w-2 shrink-0">
@@ -439,7 +559,7 @@ export default function TapToPayPage() {
           </Card>
         </div>
 
-        {/* Mode toggle — equal-width buttons on mobile, fixed-width on desktop */}
+        {/* Mode toggle */}
         <div className="flex gap-2 mb-5 sm:mb-8 max-w-md mx-auto">
           <Button
             size="lg"
@@ -448,7 +568,6 @@ export default function TapToPayPage() {
               handleReset();
               setMode("sender");
             }}
-            // flex-1 grows to fill, min-h-[48px] guarantees thumb-friendly tap target
             className="flex-1 min-h-[48px] text-sm sm:text-base active:scale-[0.98] transition-transform"
           >
             <Wallet className="w-4 h-4 mr-2 shrink-0" />
@@ -471,148 +590,56 @@ export default function TapToPayPage() {
         {/* RECEIVER MODE */}
         {mode === "receiver" && (
           <div className="max-w-md mx-auto">
-            <MerchantTagWriter />
+            <MerchantQRDisplay />
             <p className="text-center text-xs text-muted-foreground mt-5 sm:mt-6 max-w-sm mx-auto px-2 leading-relaxed">
-              When the customer's phone touches yours, their wallet will sign
-              one transaction that mints EURC against their SOL collateral and
-              transfers it to <span className="font-medium">this wallet</span> —
-              all atomic, all on-chain.
+              Show this QR to the customer. When they scan it from the Sender
+              tab, their wallet will sign one transaction that mints EURC
+              against their SOL collateral and transfers it to{" "}
+              <span className="font-medium">this wallet</span> — all atomic,
+              all on-chain.
             </p>
           </div>
         )}
 
         {/* SENDER MODE */}
-        {/*
-            Mobile: tap card FIRST (thumb-reachable), then position summary,
-                    then deposit form. Order is reversed via flex-col-reverse
-                    on the LEFT column on desktop.
-            Desktop: side-by-side, deposit on left.
-        */}
         {mode === "sender" && (
           <div className="grid md:grid-cols-2 gap-5 sm:gap-6 max-w-4xl mx-auto">
-            {/* RIGHT column on desktop, FIRST on mobile — payment + tap */}
+            {/* RIGHT column on desktop, FIRST on mobile — pay flow */}
             <div className="space-y-5 sm:space-y-6 md:order-2">
-              {/* Amount picker */}
-              <Card className="border border-border/60 bg-zinc-900/40">
-                <CardContent className="pt-5 sm:pt-6 px-4 sm:px-6 space-y-3 sm:space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                      Payment Amount
-                    </h3>
-                    <p className="text-[10px] sm:text-xs text-muted-foreground">
-                      Limit:{" "}
-                      <span className="text-emerald-400 font-medium">
-                        €{availableCreditEur.toFixed(2)}
-                      </span>
-                    </p>
-                  </div>
-
-                  <div className="relative">
-                    <Input
-                      // inputMode="decimal" tells Android to open the numeric
-                      // keypad with a decimal point. Without this, it opens
-                      // the QWERTY keyboard or the numeric pad without ".".
-                      type="text"
-                      inputMode="decimal"
-                      pattern="[0-9]*\.?[0-9]*"
-                      value={amount || ""}
-                      onChange={(e) => {
-                        const v = e.target.value.replace(/[^0-9.]/g, "");
-                        setAmount(parseFloat(v) || 0);
-                      }}
-                      disabled={isProcessing}
-                      // text-[16px] prevents iOS from zooming on focus.
-                      // h-14 = 56px, comfortable thumb target.
-                      className="text-2xl font-bold h-14 pr-20 tabular-nums text-[16px]"
-                      placeholder="0.00"
-                      autoComplete="off"
-                      enterKeyHint="done"
-                    />
-                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-emerald-400 pointer-events-none">
-                      EURC
-                    </span>
-                  </div>
-
-                  {/* Quick-amount pills — min-h-[44px] guarantees tappable */}
-                  <div className="grid grid-cols-5 gap-1.5 sm:gap-2">
-                    {QUICK_EUR_AMOUNTS.map((amt) => (
-                      <button
-                        key={amt}
-                        type="button"
-                        onClick={() => setAmount(amt)}
-                        disabled={isProcessing}
-                        className={`min-h-[44px] rounded-lg border text-sm font-medium transition-all active:scale-95 ${
-                          amount === amt
-                            ? "border-emerald-500 bg-emerald-500/15 text-emerald-300"
-                            : "border-border bg-secondary/40 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                        }`}
-                      >
-                        {amt}
-                      </button>
-                    ))}
-                  </div>
-
-                  {isOverLimit && amount > 0 && (
-                    <div className="flex items-start gap-2 p-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-300">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                      <span>
-                        Exceeds available credit (€
-                        {availableCreditEur.toFixed(2)})
-                      </span>
-                    </div>
-                  )}
-                  {tooLowHF && (
-                    <div className="flex items-start gap-2 p-2.5 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-xs text-yellow-200">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                      <span>
-                        Health factor below 1.2 — add collateral first
-                      </span>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Tap card */}
+              {/* Pay card */}
               <Card className="border-2 border-emerald-500/30 bg-gradient-to-br from-zinc-900 via-emerald-950/10 to-black shadow-2xl shadow-emerald-500/10">
                 <CardContent className="pt-6 pb-6 sm:pt-8 sm:pb-8 px-4 sm:px-6 text-center">
                   <div className="mx-auto w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mb-3 sm:mb-4">
                     {isProcessing ? (
                       <Loader2 className="w-8 h-8 sm:w-10 sm:h-10 text-emerald-400 animate-spin" />
-                    ) : nfcState === "success" ? (
+                    ) : payState === "success" ? (
                       <CheckCircle2 className="w-8 h-8 sm:w-10 sm:h-10 text-emerald-400" />
-                    ) : nfcState === "error" ? (
+                    ) : payState === "error" ? (
                       <AlertCircle className="w-8 h-8 sm:w-10 sm:h-10 text-red-400" />
                     ) : (
-                      <Radio className="w-8 h-8 sm:w-10 sm:h-10 text-emerald-400" />
+                      <Camera className="w-8 h-8 sm:w-10 sm:h-10 text-emerald-400" />
                     )}
                   </div>
 
                   <p className="text-xs sm:text-sm font-semibold tracking-wide uppercase text-emerald-300 mb-1">
-                    {STATE_LABEL[nfcState]}
-                  </p>
-                  <p className="text-2xl sm:text-3xl font-extrabold tabular-nums mb-1">
-                    €{amount.toFixed(2)}
+                    {STATE_LABEL[payState]}
                   </p>
                   <p className="text-[11px] sm:text-xs text-muted-foreground mb-5 sm:mb-6 px-2">
-                    {nfcSupported
-                      ? "Tap your phone to a merchant tag"
-                      : "Web NFC unavailable — direct borrow mode"}
+                    Open camera, scan the merchant&apos;s QR code, confirm
                   </p>
 
-                  {nfcState === "idle" && (
+                  {payState === "idle" && (
                     <Button
                       onClick={handleStartScan}
-                      disabled={!canTap}
-                      // h-14 = 56px on mobile (comfortable). active:scale for tactile feel.
-                      // touch-manipulation removes the 300ms tap delay on Android Chrome.
+                      disabled={!canPay}
                       className="w-full h-14 text-base font-semibold bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white shadow-xl disabled:opacity-50 active:scale-[0.98] transition-transform touch-manipulation"
                     >
-                      <Smartphone className="mr-2 w-5 h-5" />
-                      {nfcSupported ? "Tap to Pay" : "Pay Now"}
+                      <Camera className="mr-2 w-5 h-5" />
+                      Scan to Pay
                     </Button>
                   )}
 
-                  {(nfcState === "success" || nfcState === "error") && (
+                  {(payState === "success" || payState === "error") && (
                     <Button
                       variant="outline"
                       onClick={handleReset}
@@ -623,28 +650,28 @@ export default function TapToPayPage() {
                     </Button>
                   )}
 
-                  {/* Receipt — compact on mobile so explorer link is above the fold */}
-                  {receipt && nfcState === "success" && (
+                  {/* Receipt */}
+                  {receipt && payState === "success" && (
                     <div className="mt-5 text-left bg-zinc-950/60 rounded-lg border border-emerald-500/20 p-3 sm:p-4 space-y-2">
                       <div className="flex justify-between text-xs sm:text-sm gap-2">
-                        <span className="text-muted-foreground shrink-0">
+                        <span className="text-zinc-400 shrink-0">
                           Merchant
                         </span>
-                        <span className="font-medium truncate">
+                        <span className="font-medium text-white truncate">
                           {receipt.merchantName}
                         </span>
                       </div>
                       <div className="flex justify-between text-xs sm:text-sm">
-                        <span className="text-muted-foreground">Amount</span>
-                        <span className="font-medium">
+                        <span className="text-zinc-400">Amount</span>
+                        <span className="font-medium text-emerald-400">
                           €{receipt.amount.toFixed(2)} EURC
                         </span>
                       </div>
                       <div className="flex justify-between text-xs sm:text-sm gap-2">
-                        <span className="text-muted-foreground shrink-0">
-                          Receipt
+                        <span className="text-zinc-400 shrink-0">
+                          Invoice
                         </span>
-                        <span className="font-mono text-[10px] sm:text-xs truncate">
+                        <span className="font-mono text-[10px] sm:text-xs text-zinc-300 truncate">
                           {receipt.receiptId}
                         </span>
                       </div>
@@ -652,7 +679,6 @@ export default function TapToPayPage() {
                         href={`https://explorer.solana.com/tx/${receipt.txHash}?cluster=devnet`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        // min-h-[44px] tap target for the explorer link
                         className="flex items-center justify-center gap-1.5 mt-3 min-h-[44px] text-xs sm:text-sm text-cyan-400 hover:text-cyan-300 active:text-cyan-200 font-medium border border-cyan-500/30 rounded-lg bg-cyan-500/5 active:scale-[0.98] transition-transform touch-manipulation"
                       >
                         <ExternalLink className="w-4 h-4" />
@@ -661,7 +687,7 @@ export default function TapToPayPage() {
                     </div>
                   )}
 
-                  {nfcState === "error" && error && (
+                  {payState === "error" && error && (
                     <p className="mt-4 text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-left break-words">
                       {error}
                     </p>
@@ -688,7 +714,7 @@ export default function TapToPayPage() {
                     <h3 className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-muted-foreground">
                       Your Position
                     </h3>
-                    {publicKey && (
+                    {wallet.publicKey && (
                       <Badge variant="success" className="text-[10px]">
                         <Activity className="w-3 h-3 mr-1" />
                         live
@@ -741,7 +767,7 @@ export default function TapToPayPage() {
           </div>
         )}
 
-        {/* Demo tip — collapsed-friendly on mobile */}
+        {/* Demo tip */}
         <div className="max-w-2xl mx-auto mt-8 sm:mt-12">
           <Card className="border border-cyan-500/20 bg-cyan-500/5">
             <CardContent className="py-3 px-4 sm:py-4 sm:px-5">
@@ -751,11 +777,13 @@ export default function TapToPayPage() {
                 </span>{" "}
                 On the merchant phone, switch to{" "}
                 <span className="font-medium">Merchant</span> mode and connect
-                that phone's wallet — that's where EURC will land. Then hold the
-                customer's phone (in <span className="font-medium">Sender</span>{" "}
-                mode) against it. The customer's wallet signs ONE transaction
-                with three instructions: borrow, transfer, and (if needed)
-                ATA-create. All atomic, all on-chain. Get DevNet SOL from{" "}
+                that phone&apos;s wallet — that&apos;s where EURC will land.
+                Generate a payment QR, then on the customer phone (in{" "}
+                <span className="font-medium">Sender</span> mode) tap{" "}
+                &ldquo;Scan to Pay&rdquo; and scan it. The customer&apos;s
+                wallet signs ONE transaction with three instructions: borrow,
+                transfer, and (if needed) ATA-create. All atomic, all on-chain.
+                Get DevNet SOL from{" "}
                 <Link
                   href="https://faucet.solana.com"
                   className="underline text-cyan-400 active:text-cyan-200"
@@ -769,6 +797,93 @@ export default function TapToPayPage() {
           </Card>
         </div>
       </main>
+
+      {/* QR scanner modal — fills the screen when scannerOpen */}
+      {scannerOpen && (
+        <QRScanner
+          onScanned={handleQRScanned}
+          onClose={() => setScannerOpen(false)}
+        />
+      )}
+
+      {/* =====================================================================
+          PHISHING-PROTECTION CONFIRMATION CARD
+          =====================================================================
+          After scanning a QR, we DO NOT auto-sign. The user has to verify
+          merchant name + amount + recipient wallet before tapping Confirm.
+          This is the layer that prevents fake QRs from silently stealing
+          funds — same pattern Phantom uses for its "trust this site" prompts.
+      ===================================================================== */}
+      {pendingPayment && (
+        <div className="fixed inset-0 z-40 bg-black/80 backdrop-blur flex items-center justify-center p-4">
+          <Card className="w-full max-w-sm border-2 border-amber-500/40 bg-zinc-900 shadow-2xl">
+            <CardContent className="p-5 space-y-4">
+              <div className="text-center">
+                <div className="mx-auto w-12 h-12 rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mb-2">
+                  <ShieldCheck className="w-6 h-6 text-amber-400" />
+                </div>
+                <h3 className="text-base font-bold text-white">Verify Payment</h3>
+                <p className="text-xs text-zinc-400 mt-1">
+                  Confirm the details below before signing
+                </p>
+              </div>
+
+              <div className="space-y-2 bg-zinc-950/60 rounded-lg p-3 border border-border/40">
+                <div className="flex justify-between text-sm">
+                  <span className="text-zinc-400">Merchant</span>
+                  <span className="font-semibold text-white">
+                    {pendingPayment.merchant}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-zinc-400">Amount</span>
+                  <span className="font-bold text-cyan-300">
+                    €{pendingPayment.amount} EURC
+                  </span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-zinc-400">To wallet</span>
+                  <span className="font-mono text-zinc-300">
+                    {pendingPayment.recipient.slice(0, 4)}…
+                    {pendingPayment.recipient.slice(-4)}
+                  </span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-zinc-400">Invoice</span>
+                  <span className="font-mono text-[10px] text-zinc-300">
+                    {pendingPayment.invoice}
+                  </span>
+                </div>
+              </div>
+
+              {/* Critical warning — investors LOVE this kind of UX detail */}
+              <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-200">
+                  Only confirm if you recognize this merchant. Anyone can make
+                  a QR — check the wallet address before paying.
+                </p>
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setPendingPayment(null)}
+                  className="flex-1 h-11"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleConfirmPayment}
+                  className="flex-1 h-11 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white"
+                >
+                  Confirm &amp; Pay
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       <Footer />
     </div>

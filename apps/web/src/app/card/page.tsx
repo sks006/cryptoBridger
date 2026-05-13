@@ -26,25 +26,25 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import Header from "@/components/cardbridger/Header";
 import Footer from "@/components/cardbridger/Footer";
-import Topup from "@/app/card/topup";
+import DepositCollateral from "@/components/cardbridger/DepositCollateral";
 import { type CardState, type CollateralPosition } from "@/lib/anchor-client";
 import { updateCardSettings } from "@/lib/api-client";
 import { formatCurrency } from "@/lib/utils";
 import Link from "next/link";
 
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useEffectiveWallet } from "@/hooks/useEffectiveWallet";
 
 export const dynamic = "force-dynamic";   // ← add this line
 
 export default function CardPage() {
-  const { publicKey } = useWallet();
+  const wallet = useEffectiveWallet();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  const walletAddress = publicKey?.toBase58() ;
+  const walletAddress = wallet.publicKey?.toBase58();
 
   const [cardState, setCardState] = useState<CardState>({
     cardNumber: "•••• •••• •••• 4291",
@@ -118,7 +118,7 @@ export default function CardPage() {
         <div className="mb-8">
           <h1 className="text-2xl font-bold">Card Management</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Manage your Lamyt Card settings, limits, and top up collateral
+            Manage your CardBridger Card settings, limits, and top up collateral
           </p>
         </div>
 
@@ -166,7 +166,7 @@ export default function CardPage() {
                           <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center">
                             <Zap className="w-3 h-3 text-white" />
                           </div>
-                          <span className="font-bold text-white text-sm tracking-wider">LAMYT</span>
+                          <span className="font-bold text-white text-sm tracking-wider">CARDBRIDGER</span>
                         </div>
                         <Badge
                           variant={cardState.mode === "credit" ? "success" : "info"}
@@ -478,11 +478,12 @@ export default function CardPage() {
 
           {/* Top Up Tab */}
           <TabsContent value="topup">
-            <div className="max-w-lg">
-              <Topup
-                walletAddress={walletAddress || ""}
-                currentCollateralUsd={position.collateralUsdValue}
-                availableCredit={position.maxBorrowable}
+            <div className="max-w-lg mx-auto">
+              <DepositCollateral
+                solPriceUsd={position.solPriceUsd}
+                onDeposited={() => {
+                  // Could trigger a refresh here if needed
+                }}
               />
             </div>
           </TabsContent>
