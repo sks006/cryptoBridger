@@ -1,11 +1,10 @@
-// apps/web/src/hooks/useHealthFactor.ts
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 import { useAnchorProvider } from "./useAnchorProvider";
 import { useSolPrice } from "./useSolPrice";
+import { useEffectiveWallet } from "./useEffectiveWallet";
 import { fetchUserPosition, type CollateralPosition } from "@/lib/anchor-client";
 
 export interface HealthFactorState {
@@ -16,63 +15,50 @@ export interface HealthFactorState {
   riskLabel: string;
   loading: boolean;
   error: string | null;
-  /** Live SOL/USD price (from Pyth Hermes), or null while still loading */
   solPriceUsd: number | null;
   refresh: () => void;
 }
 
 function getRiskLevel(hf: number) {
-  if (hf >= 2.0)
-    return { level: "safe", color: "text-emerald-400", label: "Safe" } as const;
-  if (hf >= 1.5)
-    return {
-      level: "moderate",
-      color: "text-cyan-400",
-      label: "Moderate",
-    } as const;
-  if (hf >= 1.1)
-    return {
-      level: "warning",
-      color: "text-yellow-400",
-      label: "At Risk",
-    } as const;
+  if (hf >= 2.0) return { level: "safe", color: "text-emerald-400", label: "Safe" } as const;
+  if (hf >= 1.5) return { level: "moderate", color: "text-cyan-400", label: "Moderate" } as const;
+  if (hf >= 1.1) return { level: "warning", color: "text-yellow-400", label: "At Risk" } as const;
   return { level: "critical", color: "text-red-400", label: "Critical" } as const;
 }
 
 export function useHealthFactor(address?: string): HealthFactorState {
-  const { publicKey: walletPublicKey } = useWallet();
+  const wallet = useEffectiveWallet();
   const provider = useAnchorProvider();
-  const { solUsd, loading: priceLoading, error: priceError } = useSolPrice();
+  const { solUsd, eurUsd, loading: priceLoading, error: priceError } = useSolPrice();
 
   const [position, setPosition] = useState<CollateralPosition | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchPosition = useCallback(async () => {
-    const activeAddress = address || walletPublicKey?.toBase58();
-    if (!activeAddress || !provider || !solUsd) return;
+    const targetAddress = address ?? wallet.publicKey?.toBase58();
+    if (!targetAddress || !provider || !solUsd || !eurUsd) return;
+
     setLoading(true);
     setError(null);
     try {
-      const pubkey = new PublicKey(activeAddress);
-      const pos = await fetchUserPosition(pubkey, provider, solUsd);
+      const pubkey = new PublicKey(targetAddress);
+      const pos = await fetchUserPosition(pubkey, provider, solUsd, eurUsd);
       setPosition(pos);
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [address, walletPublicKey?.toBase58(), provider, solUsd]);
+  }, [address, wallet.publicKey, provider, solUsd, eurUsd]);
 
   useEffect(() => {
     fetchPosition();
-    // Refresh every 15s — fast enough that the HF visibly drops after a borrow,
-    // slow enough not to hammer the RPC.
     const interval = setInterval(fetchPosition, 15_000);
     return () => clearInterval(interval);
   }, [fetchPosition]);
 
-  const healthFactor = position?.healthFactor ?? (walletPublicKey ? 9999 : 0);
+  const healthFactor = position?.healthFactor ?? (wallet.connected ? 9999 : 0);
   const risk = getRiskLevel(healthFactor);
 
   return {

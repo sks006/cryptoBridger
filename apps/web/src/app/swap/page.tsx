@@ -83,10 +83,10 @@ export default function SwapPage() {
             <Card className="border-emerald-500/20 bg-emerald-500/5">
               <CardContent className="p-4 space-y-2">
                 <p className="text-sm font-semibold text-emerald-400">
-                  Integrated with Lamyt Card
+                  Integrated with CardBridger Card
                 </p>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  When you spend in Debit Mode, Lamyt automatically routes your
+                  When you spend in Debit Mode, CardBridger automatically routes your
                   payment through Jupiter to convert your chosen token to the
                   merchant&apos;s currency at the best available rate — all in a
                   single transaction.

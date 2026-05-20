@@ -70,14 +70,22 @@ pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
         user_position.bump = ctx.bumps.user_position;
     } else {
         // Additional deposit
-        user_position.deposited_amount += amount;
-        user_position.shares += amount;          // 1:1 for MVP
+        user_position.deposited_amount = user_position.deposited_amount
+            .checked_add(amount)
+            .ok_or(ErrorCode::MathOverflow)?;
+        user_position.shares = user_position.shares
+            .checked_add(amount)
+            .ok_or(ErrorCode::MathOverflow)?;
         user_position.last_updated = ctx.accounts.clock.unix_timestamp;
     }
 
     // === Update Global Vault ===
-    vault.total_collateral += amount;
-    vault.total_shares += amount;
+    vault.total_collateral = vault.total_collateral
+        .checked_add(amount)
+        .ok_or(ErrorCode::MathOverflow)?;
+    vault.total_shares = vault.total_shares
+        .checked_add(amount)
+        .ok_or(ErrorCode::MathOverflow)?;
 
     msg!("Deposit successful: {} lamports by {}", amount, ctx.accounts.user.key());
 

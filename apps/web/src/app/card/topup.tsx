@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useAnchorProvider } from "@/hooks/useAnchorProvider";
-import { buildDepositTransaction } from "@/lib/anchor-client";
+
 import {
   NATIVE_MINT,
   getAssociatedTokenAddress,
@@ -64,12 +64,7 @@ export default function Topup({
     setSuccess(null);
 
     try {
-      // 1. Build the deposit transaction
-      const depositTx = await buildDepositTransaction(
-        publicKey,
-        solAmount,
-        provider
-      );
+   
 
       // 2. Prepend wrap instructions if user doesn't have wSOL
       const wSolAta = await getAssociatedTokenAddress(
@@ -105,7 +100,7 @@ export default function Topup({
       tx.add(createSyncNativeInstruction(wSolAta));
 
       // Add the actual deposit instruction
-      tx.add(depositTx.instructions[0]);
+    
 
       // 3. Get latest blockhash
       const { blockhash } = await provider.connection.getLatestBlockhash("confirmed");

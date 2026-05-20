@@ -1,52 +1,72 @@
 "use client";
 
-import { useWallet } from "@solana/wallet-adapter-react";
-import {
-  useWalletModal,
-  WalletMultiButton,
-} from "@solana/wallet-adapter-react-ui";
+import { useState, useEffect } from "react";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { Wallet, LogOut, Copy, CheckCheck, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { shortenAddress } from "@/lib/utils";
 import { cn } from "@/lib/utils";
-import { useState, useEffect } from "react"; // ← useEffect added
-import { useConnection } from "@solana/wallet-adapter-react";
+import { usePhantomMobile } from "@/hooks/usePhantomMobile";
 
 interface WalletConnectProps {
   className?: string;
 }
 
+function isMobile() {
+  if (typeof navigator === "undefined") return false;
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
 export default function WalletConnect({ className }: WalletConnectProps) {
-  const { publicKey, disconnect, connected, connecting } = useWallet();
+  // Standard wallet adapter (desktop + Phantom in-app browser)
+  const stdWallet = useWallet();
   const { setVisible } = useWalletModal();
   const { connection } = useConnection();
+
+  // Phantom mobile deep-link wallet (Chrome Android/iOS)
+  const phantomMobile = usePhantomMobile();
+
   const [copied, setCopied] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [balance, setBalance] = useState<number | null>(null);
   const [mounted, setMounted] = useState(false);
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  useEffect(() => setMounted(true), []);
 
-  // ✅ Fetch balance whenever publicKey, connected, or connection changes
+  // Determine which wallet system is active (Safe for SSR)
+  const useDeeplink = mounted && isMobile() && !(typeof window !== 'undefined' && (window as any).phantom?.solana?.isPhantom);
+  const publicKey = useDeeplink ? phantomMobile.publicKey : stdWallet.publicKey;
+  const connected = useDeeplink ? phantomMobile.connected : stdWallet.connected;
+
   useEffect(() => {
     if (connected && publicKey) {
       connection
         .getBalance(publicKey)
         .then((b) => setBalance(b / 1_000_000_000))
-        .catch((err) => {
-          console.warn(
-            "Could not fetch balance (wallet might be transitioning):",
-            err,
-          );
-          setBalance(null);
-        });
+        .catch(() => setBalance(null));
     } else {
       setBalance(null);
     }
   }, [publicKey, connected, connection]);
+
+  const handleConnect = () => {
+    if (useDeeplink) {
+      // Stay in Chrome — deep-link to Phantom for connect handshake.
+      // Phantom returns to current URL with encrypted handshake params.
+      const currentPath = window.location.pathname;
+      phantomMobile.connect(currentPath);
+    } else {
+      setVisible(true);
+    }
+  };
+
+  const handleDisconnect = () => {
+    if (useDeeplink) phantomMobile.disconnect();
+    else stdWallet.disconnect();
+    setDropdownOpen(false);
+  };
 
   const handleCopy = async () => {
     if (publicKey) {
@@ -57,16 +77,15 @@ export default function WalletConnect({ className }: WalletConnectProps) {
   };
 
   if (!mounted) {
-    return <div className={className} style={{ minWidth: "150px" }}></div>;
+    return <div className={className} style={{ minWidth: "150px" }} />;
   }
 
   if (!connected) {
-
     return (
       <div className={className}>
-        <Button 
-          variant="gradient" 
-          onClick={() => setVisible(true)}
+        <Button
+          variant="gradient"
+          onClick={handleConnect}
           className="flex items-center gap-2"
         >
           <Wallet className="w-4 h-4" />
@@ -76,6 +95,7 @@ export default function WalletConnect({ className }: WalletConnectProps) {
     );
   }
 
+  // Dropdown UI — same as before
   return (
     <div className={cn("relative", className)}>
       <button
@@ -101,10 +121,7 @@ export default function WalletConnect({ className }: WalletConnectProps) {
 
       {dropdownOpen && (
         <>
-          <div
-            className="fixed inset-0 z-10"
-            onClick={() => setDropdownOpen(false)}
-          />
+          <div className="fixed inset-0 z-10" onClick={() => setDropdownOpen(false)} />
           <div className="absolute right-0 mt-2 w-64 rounded-xl border border-border/50 bg-card/80 backdrop-blur-xl shadow-2xl shadow-black/5 z-20 overflow-hidden ring-1 ring-white/5">
             <div className="p-4 border-b border-border/50 bg-muted/20">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5">
@@ -114,27 +131,21 @@ export default function WalletConnect({ className }: WalletConnectProps) {
                 {publicKey!.toBase58()}
               </p>
             </div>
-
             <div className="p-2 space-y-1">
               <button
                 onClick={handleCopy}
                 className="group relative w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-transparent hover:bg-secondary/80 active:scale-[0.98] transition-all duration-200 text-sm font-medium text-muted-foreground hover:text-foreground ring-1 ring-transparent hover:ring-border/50"
               >
                 <div className="flex items-center justify-center w-8 h-8 rounded-md bg-background shadow-sm border border-border/50 group-hover:border-border transition-colors">
-                  {copied ? (
-                    <CheckCheck className="w-4 h-4 text-emerald-500" />
-                  ) : (
-                    <Copy className="w-4 h-4 text-muted-foreground group-hover:text-foreground transition-colors" />
-                  )}
+                  {copied ? <CheckCheck className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4 text-muted-foreground group-hover:text-foreground transition-colors" />}
                 </div>
                 {copied ? "Address Copied" : "Copy Address"}
               </button>
-
               <button
-                onClick={disconnect}
-                className="group relative w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-transparent hover:bg-red-500/10 active:scale-[0.98] transition-all duration-200 text-sm font-medium text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300 ring-1 ring-transparent hover:ring-red-500/20"
+                onClick={handleDisconnect}
+                className="group relative w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-transparent hover:bg-red-500/10 active:scale-[0.98] transition-all duration-200 text-sm font-medium text-red-500 hover:text-red-600"
               >
-                <div className="flex items-center justify-center w-8 h-8 rounded-md bg-red-500/10 border border-transparent group-hover:border-red-500/20 transition-colors">
+                <div className="flex items-center justify-center w-8 h-8 rounded-md bg-red-500/10">
                   <LogOut className="w-4 h-4" />
                 </div>
                 Disconnect Wallet

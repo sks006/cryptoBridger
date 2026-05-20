@@ -1,5 +1,5 @@
 /**
- * Lamyt Finance — Root application entry
+ * CardBridger Finance — Root application entry
  *
  * This file serves as the application manifest/root config.
  * The actual UI entry point is src/app/page.tsx (landing page).
@@ -12,7 +12,7 @@
  * - POS Simulator: /pos-simulator → src/app/pos-simulator/page.tsx
  */
 
-export const APP_NAME = "Crypto to Fiat Card Finance";
+export const APP_NAME = "CardBridger Finance";
 export const APP_VERSION = "0.1.0";
 export const APP_DESCRIPTION = "Crypto card powered by Solana & Jupiter DEX";
 

@@ -28,19 +28,21 @@ import { useCardBalance } from "@/hooks/useCardBalance";
 import { formatCurrency, shortenAddress } from "@/lib/utils";
 import type { AppTransaction } from "@/lib/anchor-client";
 
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useEffectiveWallet } from "@/hooks/useEffectiveWallet";
+import { useAnchorProvider } from "@/hooks/useAnchorProvider";
 
 const MOCK_WALLET = "8xK9mBzLpQRnVwT3cY7dFhJeN2sAuXiCvMoP4gS5tEq";
 
 export default function DashboardPage() {
-  const { publicKey } = useWallet();
+  const wallet = useEffectiveWallet();
+  const provider = useAnchorProvider();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  const walletAddress = publicKey?.toBase58() || MOCK_WALLET;
+  const walletAddress = wallet.publicKey?.toBase58() || MOCK_WALLET;
 
   const healthFactor = useHealthFactor(walletAddress);
   const cardBalance = useCardBalance(walletAddress);

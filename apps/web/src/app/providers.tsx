@@ -14,6 +14,7 @@ import {
 import { clusterApiUrl } from '@solana/web3.js';
 import { useMemo, useState, useEffect } from 'react';
 
+
 import '@solana/wallet-adapter-react-ui/styles.css';
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -23,15 +24,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
     setMounted(true);
   }, []);
 
-  const network = WalletAdapterNetwork.Devnet;
+  const network = WalletAdapterNetwork.Devnet; // Change to Mainnet for production
   const endpoint = useMemo(
     () => process.env.NEXT_PUBLIC_SOLANA_RPC || clusterApiUrl(network),
-    [network],
+    [network]
   );
 
-  // Resolve app identity from env, with sensible runtime fallbacks.
-  // On the client we can fall back to window.location.origin so previews
-  // and localhost just work without extra config.
   const appUri = useMemo(() => {
     if (process.env.NEXT_PUBLIC_APP_URL) return process.env.NEXT_PUBLIC_APP_URL;
     if (typeof window !== 'undefined') return window.location.origin;
@@ -42,40 +40,31 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   const wallets = useMemo(
     () => [
+      // Mobile-first adapter (Android MWA + fallback)
       new SolanaMobileWalletAdapter({
         addressSelector: createDefaultAddressSelector(),
         appIdentity: {
           name: appName,
           uri: appUri,
-          icon: '/icon.png', // relative path is fine; resolved against uri
+          icon: '/icon.png',           // Make sure this icon exists
         },
         authorizationResultCache: createDefaultAuthorizationResultCache(),
         cluster: network,
         onWalletNotFound: createDefaultWalletNotFoundHandler(),
       }),
-      new PhantomWalletAdapter(),
+      new PhantomWalletAdapter(),      // Critical for in-app browser
       new SolflareWalletAdapter(),
     ],
-    [appName, appUri, network],
+    [appName, appUri, network]
   );
-
-  if (!mounted) {
-    return <ConnectionProvider endpoint={endpoint}>{children}</ConnectionProvider>;
-  }
 
   return (
     <ConnectionProvider endpoint={endpoint}>
-      <WalletProvider
-        wallets={wallets}
-        autoConnect={true}
-        onError={(error) => {
-          if (error.name === 'WalletNotReadyError') {
-            console.debug('Wallet not ready');
-            return;
-          }
-          console.error('Wallet Error:', error);
-        }}
+      <WalletProvider 
+        wallets={wallets} 
+        autoConnect={true}           // Good, but we enhance in component
       >
+     
         <WalletModalProvider>{children}</WalletModalProvider>
       </WalletProvider>
     </ConnectionProvider>
