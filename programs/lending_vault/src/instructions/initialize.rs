@@ -19,10 +19,16 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 use crate::state::Vault;
+use crate::error::ErrorCode;
+
+pub const ADMIN_PUBKEY: Pubkey = pubkey!("Dtur175PvRNiR1HESsZwUi3NcS8j2GdY3WrwfQ4m5TYL");
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
-    #[account(mut)]
+    #[account(
+        mut , 
+        address = ADMIN_PUBKEY @ ErrorCode::Unauthorized
+    )]
     pub authority: Signer<'info>,
 
     #[account(

@@ -63,12 +63,20 @@ pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
     let vault = &mut ctx.accounts.vault;
 
     // Update balances
-    user_position.deposited_amount -= amount;
-    user_position.shares -= amount;
+    user_position.deposited_amount = user_position.deposited_amount
+        .checked_sub(amount)
+        .ok_or(ErrorCode::MathOverflow)?;
+    user_position.shares = user_position.shares
+        .checked_sub(amount)
+        .ok_or(ErrorCode::MathOverflow)?;
     user_position.last_updated = ctx.accounts.clock.unix_timestamp;
 
-    vault.total_collateral -= amount;
-    vault.total_shares -= amount;
+    vault.total_collateral = vault.total_collateral
+        .checked_sub(amount)
+        .ok_or(ErrorCode::MathOverflow)?;
+    vault.total_shares = vault.total_shares
+        .checked_sub(amount)
+        .ok_or(ErrorCode::MathOverflow)?;
 
     msg!("Withdraw successful: {} lamports", amount);
     Ok(())
